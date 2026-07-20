@@ -42,11 +42,8 @@ export default function Page() {
 
   function handleDashboardAction(action: DashboardAction) {
     switch (action) {
-      case "chatbot":
-        setOverlay("chatbot")
-        break
-      case "summary":
-        setOverlay("summary")
+      case "dependents":
+        setSubScreen("dependents")
         break
       case "timeline":
         setTab("timeline")
@@ -164,8 +161,6 @@ export default function Page() {
           showAdd={!minor}
         />
 
-        {overlay === "chatbot" && <AiChatbot user={user} onClose={() => setOverlay(null)} />}
-        {overlay === "summary" && <AiSummary user={user} onClose={() => setOverlay(null)} />}
         {overlay === "upload" && !minor && (
           <DoctorUpload
             store={store}

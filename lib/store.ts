@@ -22,6 +22,23 @@ export type MedicalReport = {
   createdAt: number
 }
 
+export type DependentProfile = {
+  id: string
+  name: string
+  dob: string
+  /** Family relationship type, e.g. "Child" or "Parent". */
+  relationship: string
+  bloodGroup: string
+  allergies: string[]
+  conditions: string[]
+  contacts: EmergencyContact[]
+  /** Guardian-assigned login for subsequent minor view-only access. */
+  assignedEmail: string
+  assignedPassword: string
+  /** Physical paired tag identifier, e.g. "MT-7Q2K". */
+  mediTagId: string
+}
+
 export type UserProfile = {
   name: string
   dob: string
@@ -34,6 +51,7 @@ export type UserProfile = {
   medications: string[]
   contacts: EmergencyContact[]
   reports: MedicalReport[]
+  dependents: DependentProfile[]
 }
 
 type Database = {
@@ -77,6 +95,19 @@ export function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 }
 
+/** Generates a physical MediTag identifier like "MT-7Q2K" (ambiguous chars removed). */
+export function makeMediTag(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+  let code = ""
+  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)]
+  return `MT-${code}`
+}
+
+/** Ensures a stored profile has all newer fields (backfills for older records). */
+function normalizeUser(user: UserProfile): UserProfile {
+  return { ...user, dependents: user.dependents ?? [] }
+}
+
 /**
  * A profile belongs to a minor (child) when the user is under 18.
  * Minors get read-only access; adults (18+) can edit their records.
@@ -99,6 +130,9 @@ export type StoreApi = {
   resetAll: () => void
   addReport: (report: Omit<MedicalReport, "id" | "createdAt">) => void
   updateProfile: (partial: Partial<UserProfile>) => void
+  addDependent: (data: Omit<DependentProfile, "id" | "mediTagId">) => void
+  updateDependent: (id: string, partial: Partial<Omit<DependentProfile, "id">>) => void
+  removeDependent: (id: string) => void
 }
 
 export function useStore(): StoreApi {
@@ -115,9 +149,11 @@ export function useStore(): StoreApi {
     writeDb(next)
   }, [])
 
-  const currentUser = db.session ? db.users[db.session] ?? null : null
+  const rawCurrent = db.session ? db.users[db.session] ?? null : null
+  const currentUser = rawCurrent ? normalizeUser(rawCurrent) : null
   const allUsers = Object.values(db.users)
-  const emergencyProfile = currentUser ?? (allUsers.length > 0 ? allUsers[allUsers.length - 1] : null)
+  const rawEmergency = currentUser ?? (allUsers.length > 0 ? allUsers[allUsers.length - 1] : null)
+  const emergencyProfile = rawEmergency ? normalizeUser(rawEmergency) : null
 
   const register: StoreApi["register"] = useCallback(
     (data) => {
@@ -137,6 +173,7 @@ export function useStore(): StoreApi {
         medications: [],
         contacts: [],
         reports: [],
+        dependents: [],
       }
       const next: Database = {
         users: { ...existing.users, [email]: user },
@@ -198,8 +235,71 @@ export function useStore(): StoreApi {
     [persist],
   )
 
-  return { ready, currentUser, emergencyProfile, register, login, logout, resetAll, addReport, updateProfile }
+  const addDependent: StoreApi["addDependent"] = useCallback(
+    (data) => {
+      const existing = readDb()
+      if (!existing.session) return
+      const user = existing.users[existing.session]
+      if (!user) return
+      const dependent: DependentProfile = { ...data, id: uid(), mediTagId: makeMediTag() }
+      const updated: UserProfile = {
+        ...normalizeUser(user),
+        dependents: [...(user.dependents ?? []), dependent],
+      }
+      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
+    },
+    [persist],
+  )
+
+  const updateDependent: StoreApi["updateDependent"] = useCallback(
+    (id, partial) => {
+      const existing = readDb()
+      if (!existing.session) return
+      const user = existing.users[existing.session]
+      if (!user) return
+      const updated: UserProfile = {
+        ...normalizeUser(user),
+        dependents: (user.dependents ?? []).map((d) => (d.id === id ? { ...d, ...partial } : d)),
+      }
+      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
+    },
+    [persist],
+  )
+
+  const removeDependent: StoreApi["removeDependent"] = useCallback(
+    (id) => {
+      const existing = readDb()
+      if (!existing.session) return
+      const user = existing.users[existing.session]
+      if (!user) return
+      const updated: UserProfile = {
+        ...normalizeUser(user),
+        dependents: (user.dependents ?? []).filter((d) => d.id !== id),
+      }
+      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
+    },
+    [persist],
+  )
+
+  return {
+    ready,
+    currentUser,
+    emergencyProfile,
+    register,
+    login,
+    logout,
+    resetAll,
+    addReport,
+    updateProfile,
+    addDependent,
+    updateDependent,
+    removeDependent,
+  }
 }
+
+export const RELATIONSHIPS = ["Child", "Parent", "Spouse", "Sibling", "Grandparent", "Ward", "Other"]
+
+export const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
 export const SPECIALIZATIONS = [
   "Cardiologist",

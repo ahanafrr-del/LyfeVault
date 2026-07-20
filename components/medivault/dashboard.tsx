@@ -3,8 +3,8 @@
 import {
   Bell,
   Search,
-  Bot,
-  Sparkles,
+  Users,
+  ChevronRight,
   FileText,
   Pill,
   AlertTriangle,
@@ -18,8 +18,7 @@ import {
 import { computeAge, isChildProfile, type UserProfile } from "@/lib/store"
 
 export type DashboardAction =
-  | "chatbot"
-  | "summary"
+  | "dependents"
   | "timeline"
   | "departments"
   | "health-info"
@@ -30,11 +29,9 @@ export type DashboardAction =
 const TILES: {
   id: DashboardAction
   label: string
-  icon: typeof Bot
+  icon: typeof FileText
   tone: "primary" | "accent"
 }[] = [
-  { id: "chatbot", label: "AI Chatbot", icon: Bot, tone: "primary" },
-  { id: "summary", label: "AI Health Summary", icon: Sparkles, tone: "accent" },
   { id: "timeline", label: "Medical Reports", icon: FileText, tone: "primary" },
   { id: "departments", label: "Prescriptions", icon: Pill, tone: "accent" },
   { id: "health-info", label: "Allergies & Conditions", icon: AlertTriangle, tone: "primary" },
@@ -64,6 +61,7 @@ export function Dashboard({
         .toUpperCase()
     : "U"
   const primaryContact = user.contacts[0]
+  const dependentCount = (user.dependents ?? []).length
 
   return (
     <div className="w-full bg-secondary pb-10">
@@ -132,6 +130,28 @@ export function Dashboard({
             </p>
           )}
         </div>
+      </div>
+
+      {/* Centerpiece — Dependent Profiles hub */}
+      <div className="mt-4 px-4">
+        <button
+          type="button"
+          onClick={() => onAction("dependents")}
+          className="flex w-full items-center gap-4 rounded-2xl bg-accent p-4 text-left text-accent-foreground shadow-lg shadow-accent/25 transition hover:-translate-y-0.5 hover:brightness-110"
+        >
+          <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-white/20">
+            <Users className="h-7 w-7" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-base font-bold leading-tight">Dependent Profiles</span>
+            <span className="mt-0.5 block text-xs text-accent-foreground/85">
+              {dependentCount > 0
+                ? `${dependentCount} linked ${dependentCount === 1 ? "profile" : "profiles"} \u00b7 manage family passports`
+                : "Manage family passports & MediTags"}
+            </span>
+          </span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-accent-foreground/80" />
+        </button>
       </div>
 
       {/* Bento grid */}
