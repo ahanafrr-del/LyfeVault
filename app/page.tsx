@@ -12,6 +12,7 @@ import { MinorDashboard } from "@/components/medivault/minor-dashboard"
 import { TabBar, type MainTab } from "@/components/medivault/tab-bar"
 import { Timeline } from "@/components/medivault/timeline"
 import { Departments } from "@/components/medivault/departments"
+import { DependentsDirectory } from "@/components/medivault/dependents-directory"
 import { AiChatbot } from "@/components/medivault/ai-chatbot"
 import { AiSummary } from "@/components/medivault/ai-summary"
 import { DoctorUpload } from "@/components/medivault/doctor-upload"
@@ -20,7 +21,7 @@ import { ScreenHeader, EmptyState } from "@/components/medivault/shared"
 
 type Stage = "splash" | "auth" | "segment" | "emergency" | "app"
 type Overlay = "chatbot" | "summary" | "upload" | null
-type SubScreen = "departments" | null
+type SubScreen = "departments" | "dependents" | null
 
 export default function Page() {
   const store = useStore()
@@ -118,6 +119,10 @@ export default function Page() {
 
     if (subScreen === "departments") {
       return <Departments user={user} onBack={() => setSubScreen(null)} />
+    }
+
+    if (subScreen === "dependents") {
+      return <DependentsDirectory store={store} user={user} onBack={() => setSubScreen(null)} />
     }
 
     return (
