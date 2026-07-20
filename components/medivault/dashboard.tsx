@@ -13,8 +13,9 @@ import {
   Settings,
   Droplet,
   Phone,
+  Lock,
 } from "lucide-react"
-import { computeAge, type UserProfile } from "@/lib/store"
+import { computeAge, isChildProfile, type UserProfile } from "@/lib/store"
 
 export type DashboardAction =
   | "chatbot"
@@ -53,6 +54,7 @@ export function Dashboard({
 }) {
   const firstName = user.name.split(" ")[0] || "there"
   const age = computeAge(user.dob)
+  const readOnly = isChildProfile(user)
   const initials = user.name
     ? user.name
         .split(" ")
@@ -69,7 +71,15 @@ export function Dashboard({
       <div className="sticky top-0 z-10 flex items-center gap-3 bg-secondary/90 px-4 py-3.5 backdrop-blur-md">
         <div className="min-w-0 flex-1">
           <p className="text-xs text-muted-foreground">Hello,</p>
-          <p className="truncate text-lg font-bold text-foreground">{firstName}</p>
+          <div className="flex items-center gap-2">
+            <p className="truncate text-lg font-bold text-foreground">{firstName}</p>
+            {readOnly && (
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
+                <Lock className="h-3 w-3" />
+                View only
+              </span>
+            )}
+          </div>
         </div>
         <button
           type="button"
@@ -101,7 +111,7 @@ export function Dashboard({
           </div>
           <div className="grid grid-cols-3 gap-2">
             <MiniStat
-              icon={<Droplet className="h-4 w-4" />}
+              icon={readOnly ? <Lock className="h-4 w-4" /> : <Droplet className="h-4 w-4" />}
               label="Blood"
               value={user.bloodGroup || "N/A"}
             />

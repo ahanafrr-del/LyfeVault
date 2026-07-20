@@ -77,6 +77,16 @@ export function uid(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 }
 
+/**
+ * A profile belongs to a minor (child) when the user is under 18.
+ * Minors get read-only access; adults (18+) can edit their records.
+ */
+export function isChildProfile(user: Pick<UserProfile, "dob"> | null | undefined): boolean {
+  if (!user) return false
+  const age = computeAge(user.dob)
+  return age !== null && age < 18
+}
+
 export type StoreApi = {
   ready: boolean
   currentUser: UserProfile | null

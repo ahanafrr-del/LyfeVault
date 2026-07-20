@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Bell, User as UserIcon, LogOut } from "lucide-react"
+import { Bell } from "lucide-react"
 import { useStore } from "@/lib/store"
 import { SplashScreen } from "@/components/medivault/splash-screen"
 import { AuthScreen } from "@/components/medivault/auth-screen"
@@ -13,6 +13,7 @@ import { Departments } from "@/components/medivault/departments"
 import { AiChatbot } from "@/components/medivault/ai-chatbot"
 import { AiSummary } from "@/components/medivault/ai-summary"
 import { DoctorUpload } from "@/components/medivault/doctor-upload"
+import { ProfileScreen } from "@/components/medivault/profile-screen"
 import { ScreenHeader, EmptyState } from "@/components/medivault/shared"
 
 type Stage = "splash" | "auth" | "emergency" | "app"
@@ -54,8 +55,12 @@ export default function Page() {
   }
 
   function handleLogout() {
+    // Clear the persisted session (userRole -> null). Age-derived isChildProfile
+    // resets automatically once there is no active user. Non-session data in
+    // localStorage (registered accounts, reports) is preserved.
     store.logout()
-    setStage("auth")
+    // Reset all in-memory navigation state and return to Screen 0 (Splash / NFC entry).
+    setStage("splash")
     setTab("home")
     setSubScreen(null)
     setOverlay(null)
@@ -123,36 +128,7 @@ export default function Page() {
             </div>
           )}
           {tab === "profile" && (
-            <div className="flex h-full flex-col bg-secondary">
-              <ScreenHeader title="Profile" subtitle={user.email} />
-              <div className="flex-1 space-y-4 overflow-y-auto p-4">
-                <div className="flex items-center gap-4 rounded-2xl bg-card p-4 shadow-sm">
-                  <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-primary text-lg font-bold text-primary-foreground">
-                    {(user.name || "U")
-                      .split(" ")
-                      .map((p) => p[0])
-                      .slice(0, 2)
-                      .join("")
-                      .toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate font-bold text-foreground">{user.name || "Unnamed"}</p>
-                    <p className="truncate text-sm text-muted-foreground">
-                      {user.bloodGroup || "Blood N/A"}
-                      {user.gender ? ` \u00b7 ${user.gender}` : ""}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-destructive py-3 text-sm font-bold text-white shadow-lg shadow-destructive/25 transition hover:brightness-105"
-                >
-                  <LogOut className="h-5 w-5" />
-                  Log out
-                </button>
-              </div>
-            </div>
+            <ProfileScreen store={store} user={user} onLogout={handleLogout} />
           )}
         </div>
 
