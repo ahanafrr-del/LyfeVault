@@ -125,32 +125,36 @@ export default function Page() {
 
     return (
       <div className="flex h-full flex-col">
-        <div className="min-h-0 flex-1">
-          {tab === "home" &&
-            (minor ? (
-              // Screen 3b — strict view-only layout, no bento grid, no FAB.
-              <MinorDashboard user={user} onNotifications={() => setTab("notifications")} />
-            ) : (
-              <Dashboard
-                user={user}
-                onAction={handleDashboardAction}
-                onNotifications={() => setTab("notifications")}
-              />
-            ))}
-          {tab === "timeline" && <Timeline user={user} showBack={false} />}
-          {tab === "notifications" && (
-            <div className="flex h-full flex-col bg-secondary">
-              <ScreenHeader title="Alerts" subtitle="Reminders & updates" />
-              <EmptyState
-                icon={<Bell className="h-7 w-7" />}
-                title="You're all caught up"
-                hint="Notifications about new reports, verifications, and reminders will appear here."
-              />
+        <div className="relative h-full flex-1 overflow-hidden">
+          <div className="flex h-full">
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {tab === "home" &&
+                (minor ? (
+                  // Screen 3b — strict view-only layout, no bento grid, no FAB.
+                  <MinorDashboard user={user} onNotifications={() => setTab("notifications")} />
+                ) : (
+                  <Dashboard
+                    user={user}
+                    onAction={handleDashboardAction}
+                    onNotifications={() => setTab("notifications")}
+                  />
+                ))}
+              {tab === "timeline" && <Timeline user={user} showBack={false} />}
+              {tab === "notifications" && (
+                <div className="flex h-full flex-col bg-secondary">
+                  <ScreenHeader title="Alerts" subtitle="Reminders & updates" />
+                  <EmptyState
+                    icon={<Bell className="h-7 w-7" />}
+                    title="You're all caught up"
+                    hint="Notifications about new reports, verifications, and reminders will appear here."
+                  />
+                </div>
+              )}
+              {tab === "profile" && (
+                <ProfileScreen store={store} user={user} onLogout={handleLogout} />
+              )}
             </div>
-          )}
-          {tab === "profile" && (
-            <ProfileScreen store={store} user={user} onLogout={handleLogout} />
-          )}
+          </div>
         </div>
 
         <TabBar
