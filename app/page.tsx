@@ -2,11 +2,13 @@
 
 import { useState } from "react"
 import { Bell } from "lucide-react"
-import { useStore } from "@/lib/store"
+import { useStore, isChildProfile } from "@/lib/store"
 import { SplashScreen } from "@/components/medivault/splash-screen"
 import { AuthScreen } from "@/components/medivault/auth-screen"
+import { SegmentationScreen } from "@/components/medivault/segmentation-screen"
 import { EmergencyView } from "@/components/medivault/emergency-view"
 import { Dashboard, type DashboardAction } from "@/components/medivault/dashboard"
+import { MinorDashboard } from "@/components/medivault/minor-dashboard"
 import { TabBar, type MainTab } from "@/components/medivault/tab-bar"
 import { Timeline } from "@/components/medivault/timeline"
 import { Departments } from "@/components/medivault/departments"
@@ -16,7 +18,7 @@ import { DoctorUpload } from "@/components/medivault/doctor-upload"
 import { ProfileScreen } from "@/components/medivault/profile-screen"
 import { ScreenHeader, EmptyState } from "@/components/medivault/shared"
 
-type Stage = "splash" | "auth" | "emergency" | "app"
+type Stage = "splash" | "auth" | "segment" | "emergency" | "app"
 type Overlay = "chatbot" | "summary" | "upload" | null
 type SubScreen = "departments" | null
 
@@ -28,6 +30,15 @@ export default function Page() {
   const [subScreen, setSubScreen] = useState<SubScreen>(null)
 
   const user = store.currentUser
+  const minor = isChildProfile(user)
+
+  function handleReset() {
+    store.resetAll()
+    setStage("splash")
+    setTab("home")
+    setSubScreen(null)
+    setOverlay(null)
+  }
 
   function handleDashboardAction(action: DashboardAction) {
     switch (action) {
@@ -68,17 +79,23 @@ export default function Page() {
 
   function renderPhoneContent() {
     if (stage === "splash") {
-      return <SplashScreen onEnter={() => setStage("auth")} />
+      return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
     }
 
     if (stage === "auth") {
       return (
         <AuthScreen
           store={store}
-          onAuthed={() => setStage("app")}
+          onAuthed={(mode) => setStage(mode === "signup" ? "segment" : "app")}
           onEmergency={() => setStage("emergency")}
         />
       )
+    }
+
+    if (stage === "segment") {
+      // Screen 1.5 — confirm minor vs adult segmentation before entering the app.
+      if (!user) return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
+      return <SegmentationScreen user={user} onProceed={() => setStage("app")} />
     }
 
     if (stage === "emergency") {
@@ -96,7 +113,7 @@ export default function Page() {
       return (
         <AuthScreen
           store={store}
-          onAuthed={() => setStage("app")}
+          onAuthed={(mode) => setStage(mode === "signup" ? "segment" : "app")}
           onEmergency={() => setStage("emergency")}
         />
       )
@@ -109,13 +126,17 @@ export default function Page() {
     return (
       <div className="flex h-full flex-col">
         <div className="min-h-0 flex-1">
-          {tab === "home" && (
-            <Dashboard
-              user={user}
-              onAction={handleDashboardAction}
-              onNotifications={() => setTab("notifications")}
-            />
-          )}
+          {tab === "home" &&
+            (minor ? (
+              // Screen 3b — strict view-only layout, no bento grid, no FAB.
+              <MinorDashboard user={user} onNotifications={() => setTab("notifications")} />
+            ) : (
+              <Dashboard
+                user={user}
+                onAction={handleDashboardAction}
+                onNotifications={() => setTab("notifications")}
+              />
+            ))}
           {tab === "timeline" && <Timeline user={user} showBack={false} />}
           {tab === "notifications" && (
             <div className="flex h-full flex-col bg-secondary">
@@ -132,11 +153,16 @@ export default function Page() {
           )}
         </div>
 
-        <TabBar active={tab} onNavigate={setTab} onAdd={() => setOverlay("upload")} />
+        <TabBar
+          active={tab}
+          onNavigate={setTab}
+          onAdd={() => setOverlay("upload")}
+          showAdd={!minor}
+        />
 
         {overlay === "chatbot" && <AiChatbot user={user} onClose={() => setOverlay(null)} />}
         {overlay === "summary" && <AiSummary user={user} onClose={() => setOverlay(null)} />}
-        {overlay === "upload" && (
+        {overlay === "upload" && !minor && (
           <DoctorUpload
             store={store}
             onClose={() => setOverlay(null)}

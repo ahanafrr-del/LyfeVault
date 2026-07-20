@@ -96,6 +96,7 @@ export type StoreApi = {
   ) => { ok: boolean; error?: string }
   login: (email: string, password: string) => { ok: boolean; error?: string }
   logout: () => void
+  resetAll: () => void
   addReport: (report: Omit<MedicalReport, "id" | "createdAt">) => void
   updateProfile: (partial: Partial<UserProfile>) => void
 }
@@ -165,6 +166,13 @@ export function useStore(): StoreApi {
     persist({ ...existing, session: null })
   }, [persist])
 
+  // Demo utility: wipe ALL stored accounts, reports, and the active session so
+  // profiles can be swapped cleanly during live testing.
+  const resetAll: StoreApi["resetAll"] = useCallback(() => {
+    if (typeof window !== "undefined") window.localStorage.removeItem(KEY)
+    setDb(EMPTY_DB)
+  }, [])
+
   const addReport: StoreApi["addReport"] = useCallback(
     (report) => {
       const existing = readDb()
@@ -190,7 +198,7 @@ export function useStore(): StoreApi {
     [persist],
   )
 
-  return { ready, currentUser, emergencyProfile, register, login, logout, addReport, updateProfile }
+  return { ready, currentUser, emergencyProfile, register, login, logout, resetAll, addReport, updateProfile }
 }
 
 export const SPECIALIZATIONS = [

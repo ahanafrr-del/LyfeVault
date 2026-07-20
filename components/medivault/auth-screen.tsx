@@ -13,7 +13,8 @@ export function AuthScreen({
   onEmergency,
 }: {
   store: StoreApi
-  onAuthed: () => void
+  /** mode tells the parent whether to route to the segmentation interstitial (signup) or straight in (login). */
+  onAuthed: (mode: "login" | "signup") => void
   onEmergency: () => void
 }) {
   const [mode, setMode] = useState<"login" | "signup">("login")
@@ -32,12 +33,12 @@ export function AuthScreen({
     if (mode === "login") {
       const res = store.login(email, password)
       if (!res.ok) return setError(res.error ?? "Login failed.")
-      onAuthed()
+      onAuthed("login")
     } else {
       if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
       const res = store.register({ name, dob, bloodGroup, gender, email, password })
       if (!res.ok) return setError(res.error ?? "Sign up failed.")
-      onAuthed()
+      onAuthed("signup")
     }
   }
 

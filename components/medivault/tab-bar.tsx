@@ -8,10 +8,13 @@ export function TabBar({
   active,
   onNavigate,
   onAdd,
+  showAdd = true,
 }: {
   active: MainTab
   onNavigate: (tab: MainTab) => void
   onAdd: () => void
+  /** Minors (read-only profiles) never see the "Add Report" FAB. */
+  showAdd?: boolean
 }) {
   const tabs: { id: MainTab; label: string; icon: typeof Home }[] = [
     { id: "home", label: "Home", icon: Home },
@@ -19,6 +22,17 @@ export function TabBar({
     { id: "notifications", label: "Alerts", icon: Bell },
     { id: "profile", label: "Profile", icon: User },
   ]
+
+  // Without the FAB, render all four tabs evenly; with it, split around the center button.
+  if (!showAdd) {
+    return (
+      <nav className="relative z-30 flex items-center justify-around border-t border-border bg-card px-2 pb-2 pt-2.5">
+        {tabs.map((t) => (
+          <TabButton key={t.id} tab={t} active={active === t.id} onClick={() => onNavigate(t.id)} />
+        ))}
+      </nav>
+    )
+  }
 
   return (
     <nav className="relative z-30 flex items-center justify-around border-t border-border bg-card px-2 pb-2 pt-2.5">
