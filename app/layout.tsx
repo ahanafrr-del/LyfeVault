@@ -3,8 +3,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'MediVault - Healthcare Records Management',
-  description: 'Secure healthcare records management app with AI health insights',
+  title: 'LyfVault - Premium Medical SaaS',
+  description: 'Secure medical records platform with role-based access and emergency protocols',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -28,8 +28,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   colorScheme: 'light dark',
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#005b7f' },
-    { media: '(prefers-color-scheme: dark)', color: '#00a884' },
+    { media: '(prefers-color-scheme: light)', color: '#06b6d4' },
+    { media: '(prefers-color-scheme: dark)', color: '#0ea5e9' },
   ],
 }
 
