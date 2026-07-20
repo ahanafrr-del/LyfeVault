@@ -1,94 +1,190 @@
 "use client"
 
 import { useState } from "react"
-import { PhoneFrame } from "@/components/meditag/phone-frame"
-import { PrivacyScreen } from "@/components/meditag/privacy-screen"
-import { AuthScreen } from "@/components/meditag/auth-screen"
-import { EmergencyView } from "@/components/meditag/emergency-view"
-import { PatientDashboard } from "@/components/meditag/patient-dashboard"
-import { DoctorPortal } from "@/components/meditag/doctor-portal"
-import { TimelineScreen } from "@/components/meditag/timeline-screen"
-import { AddReportScanner } from "@/components/meditag/add-report-scanner"
-import { AIHealthSummary } from "@/components/meditag/ai-health-summary"
+import { Bell, User as UserIcon, LogOut } from "lucide-react"
+import { useStore } from "@/lib/store"
+import { SplashScreen } from "@/components/medivault/splash-screen"
+import { AuthScreen } from "@/components/medivault/auth-screen"
+import { EmergencyView } from "@/components/medivault/emergency-view"
+import { Dashboard, type DashboardAction } from "@/components/medivault/dashboard"
+import { TabBar, type MainTab } from "@/components/medivault/tab-bar"
+import { Timeline } from "@/components/medivault/timeline"
+import { Departments } from "@/components/medivault/departments"
+import { AiChatbot } from "@/components/medivault/ai-chatbot"
+import { AiSummary } from "@/components/medivault/ai-summary"
+import { DoctorUpload } from "@/components/medivault/doctor-upload"
+import { ScreenHeader, EmptyState } from "@/components/medivault/shared"
 
-type Screen =
-  | "privacy"
-  | "auth"
-  | "emergency"
-  | "dashboard"
-  | "doctor"
-  | "timeline"
-  | "scanner"
-  | "ai"
-
-const SCREENS: { id: Screen; label: string }[] = [
-  { id: "privacy", label: "Privacy & Terms" },
-  { id: "auth", label: "Auth & Signup" },
-  { id: "emergency", label: "Emergency View" },
-  { id: "dashboard", label: "Patient Dashboard" },
-  { id: "doctor", label: "Doctor Access Portal" },
-  { id: "timeline", label: "Timeline" },
-  { id: "scanner", label: "Add Report Scanner" },
-  { id: "ai", label: "AI Summary" },
-]
+type Stage = "splash" | "auth" | "emergency" | "app"
+type Overlay = "chatbot" | "summary" | "upload" | null
+type SubScreen = "departments" | null
 
 export default function Page() {
-  const [screen, setScreen] = useState<Screen>("privacy")
+  const store = useStore()
+  const [stage, setStage] = useState<Stage>("splash")
+  const [tab, setTab] = useState<MainTab>("home")
+  const [overlay, setOverlay] = useState<Overlay>(null)
+  const [subScreen, setSubScreen] = useState<SubScreen>(null)
 
-  function render() {
-    switch (screen) {
-      case "privacy":
-        return <PrivacyScreen onContinue={() => setScreen("auth")} />
-      case "auth":
-        return (
-          <AuthScreen onEmergency={() => setScreen("emergency")} onAuthenticated={() => setScreen("dashboard")} />
-        )
-      case "emergency":
-        return <EmergencyView />
-      case "dashboard":
-        return (
-          <PatientDashboard
-            onOpenDoctorPortal={() => setScreen("doctor")}
-            onOpenTimeline={() => setScreen("timeline")}
-            onOpenAISummary={() => setScreen("ai")}
-          />
-        )
-      case "doctor":
-        return <DoctorPortal onManageRecords={() => setScreen("scanner")} />
+  const user = store.currentUser
+
+  function handleDashboardAction(action: DashboardAction) {
+    switch (action) {
+      case "chatbot":
+        setOverlay("chatbot")
+        break
+      case "summary":
+        setOverlay("summary")
+        break
       case "timeline":
-        return <TimelineScreen />
-      case "scanner":
-        return <AddReportScanner />
-      case "ai":
-        return <AIHealthSummary />
+        setTab("timeline")
+        break
+      case "departments":
+      case "health-info":
+      case "vitals":
+        setSubScreen("departments")
+        break
+      case "emergency":
+        setStage("emergency")
+        break
+      case "settings":
+        setTab("profile")
+        break
     }
   }
 
-  return (
-    <main className="min-h-screen bg-gradient-to-b from-sky-100 via-background to-background">
-      {/* Prototype switcher */}
-      <div className="sticky top-0 z-50 border-b border-border/60 bg-card/70 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center gap-2 overflow-x-auto px-4 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <span className="mr-1 shrink-0 text-xs font-bold uppercase tracking-wide text-primary">MediTag</span>
-          {SCREENS.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setScreen(s.id)}
-              className={`shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
-                screen === s.id
-                  ? "bg-primary text-primary-foreground shadow"
-                  : "bg-secondary text-secondary-foreground hover:bg-secondary/70"
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
+  function handleLogout() {
+    store.logout()
+    setStage("auth")
+    setTab("home")
+    setSubScreen(null)
+    setOverlay(null)
+  }
 
-      <div className="px-4 py-8">
-        <PhoneFrame>{render()}</PhoneFrame>
+  function renderPhoneContent() {
+    if (stage === "splash") {
+      return <SplashScreen onEnter={() => setStage("auth")} />
+    }
+
+    if (stage === "auth") {
+      return (
+        <AuthScreen
+          store={store}
+          onAuthed={() => setStage("app")}
+          onEmergency={() => setStage("emergency")}
+        />
+      )
+    }
+
+    if (stage === "emergency") {
+      return (
+        <EmergencyView
+          profile={store.emergencyProfile}
+          onBack={() => setStage(user ? "app" : "auth")}
+        />
+      )
+    }
+
+    // stage === "app"
+    if (!user) {
+      // Safety fallback if session was lost
+      return (
+        <AuthScreen
+          store={store}
+          onAuthed={() => setStage("app")}
+          onEmergency={() => setStage("emergency")}
+        />
+      )
+    }
+
+    if (subScreen === "departments") {
+      return <Departments user={user} onBack={() => setSubScreen(null)} />
+    }
+
+    return (
+      <div className="flex h-full flex-col">
+        <div className="min-h-0 flex-1">
+          {tab === "home" && (
+            <Dashboard
+              user={user}
+              onAction={handleDashboardAction}
+              onNotifications={() => setTab("notifications")}
+            />
+          )}
+          {tab === "timeline" && <Timeline user={user} showBack={false} />}
+          {tab === "notifications" && (
+            <div className="flex h-full flex-col bg-secondary">
+              <ScreenHeader title="Alerts" subtitle="Reminders & updates" />
+              <EmptyState
+                icon={<Bell className="h-7 w-7" />}
+                title="You're all caught up"
+                hint="Notifications about new reports, verifications, and reminders will appear here."
+              />
+            </div>
+          )}
+          {tab === "profile" && (
+            <div className="flex h-full flex-col bg-secondary">
+              <ScreenHeader title="Profile" subtitle={user.email} />
+              <div className="flex-1 space-y-4 overflow-y-auto p-4">
+                <div className="flex items-center gap-4 rounded-2xl bg-card p-4 shadow-sm">
+                  <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-primary text-lg font-bold text-primary-foreground">
+                    {(user.name || "U")
+                      .split(" ")
+                      .map((p) => p[0])
+                      .slice(0, 2)
+                      .join("")
+                      .toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-foreground">{user.name || "Unnamed"}</p>
+                    <p className="truncate text-sm text-muted-foreground">
+                      {user.bloodGroup || "Blood N/A"}
+                      {user.gender ? ` \u00b7 ${user.gender}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-destructive py-3 text-sm font-bold text-white shadow-lg shadow-destructive/25 transition hover:brightness-105"
+                >
+                  <LogOut className="h-5 w-5" />
+                  Log out
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <TabBar active={tab} onNavigate={setTab} onAdd={() => setOverlay("upload")} />
+
+        {overlay === "chatbot" && <AiChatbot user={user} onClose={() => setOverlay(null)} />}
+        {overlay === "summary" && <AiSummary user={user} onClose={() => setOverlay(null)} />}
+        {overlay === "upload" && (
+          <DoctorUpload
+            store={store}
+            onClose={() => setOverlay(null)}
+            onDone={() => {
+              setOverlay(null)
+              setTab("timeline")
+            }}
+          />
+        )}
       </div>
+    )
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-secondary p-0 sm:p-6">
+      <PhoneFrame>{renderPhoneContent()}</PhoneFrame>
     </main>
+  )
+}
+
+function PhoneFrame({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative h-screen w-full overflow-hidden bg-card sm:h-[812px] sm:w-[390px] sm:rounded-[2.5rem] sm:border-8 sm:border-foreground/90 sm:shadow-2xl">
+      <div className="relative h-full w-full overflow-hidden">{children}</div>
+    </div>
   )
 }
