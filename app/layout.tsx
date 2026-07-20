@@ -3,8 +3,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'MediTag - Digital Medical Passport',
-  description: 'A digital medical passport accessed via NFC/QR scanning, with emergency access, role-based provider verification, and AI health insights.',
+  title: 'MediVault - Your Health, Secured',
+  description: 'A secure digital medical passport with NFC/QR entry, emergency access, medical timeline, doctor uploads, and AI health insights.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -26,11 +26,8 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'light dark',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#005b7f' },
-    { media: '(prefers-color-scheme: dark)', color: '#00a884' },
-  ],
+  colorScheme: 'light',
+  themeColor: '#005b7f',
 }
 
 export default function RootLayout({
@@ -39,7 +36,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className="bg-background">
+    <html lang="en" className="light bg-secondary">
       <body className="antialiased">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}

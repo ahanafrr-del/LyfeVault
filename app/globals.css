@@ -47,38 +47,38 @@
 
 :root {
   color-scheme: light;
-  --background: #f0f9ff;
-  --foreground: #0c2a3d;
+  --background: #e6f4f8;
+  --foreground: #0a2a35;
   --card: #ffffff;
-  --card-foreground: #0c2a3d;
+  --card-foreground: #0a2a35;
   --popover: #ffffff;
-  --popover-foreground: #0c2a3d;
-  --primary: #0ea5e9;
+  --popover-foreground: #0a2a35;
+  --primary: #005b7f;
   --primary-foreground: #ffffff;
-  --secondary: #e0f2fe;
-  --secondary-foreground: #075985;
-  --muted: #e0f2fe;
-  --muted-foreground: #5b7183;
-  --accent: #38bdf8;
-  --accent-foreground: #0c2a3d;
-  --destructive: #ef4444;
-  --border: #cfe8fa;
-  --input: #e0f2fe;
-  --ring: #0ea5e9;
-  --chart-1: #0ea5e9;
-  --chart-2: #38bdf8;
-  --chart-3: #7dd3fc;
-  --chart-4: #bae6fd;
-  --chart-5: #e0f2fe;
+  --secondary: #e6f4f8;
+  --secondary-foreground: #005b7f;
+  --muted: #eef7fa;
+  --muted-foreground: #5a7783;
+  --accent: #00a884;
+  --accent-foreground: #ffffff;
+  --destructive: #e5484d;
+  --border: #d4e9ef;
+  --input: #eef7fa;
+  --ring: #005b7f;
+  --chart-1: #005b7f;
+  --chart-2: #00a884;
+  --chart-3: #3aa9c9;
+  --chart-4: #7fcfe0;
+  --chart-5: #cfeef1;
   --radius: 1rem;
-  --sidebar: #f0f9ff;
-  --sidebar-foreground: #0c2a3d;
-  --sidebar-primary: #0ea5e9;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0a2a35;
+  --sidebar-primary: #005b7f;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #38bdf8;
-  --sidebar-accent-foreground: #0c2a3d;
-  --sidebar-border: #cfe8fa;
-  --sidebar-ring: #0ea5e9;
+  --sidebar-accent: #00a884;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #d4e9ef;
+  --sidebar-ring: #005b7f;
 }
 
 .dark {
@@ -162,7 +162,7 @@
   }
 }
 
-@keyframes scan {
+@keyframes mv-scan {
   0% {
     transform: translateY(0);
   }
@@ -172,4 +172,34 @@
   100% {
     transform: translateY(0);
   }
+}
+
+@keyframes mv-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mv-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.mv-scan {
+  animation: mv-scan 2s ease-in-out infinite;
+}
+.mv-slide-up {
+  animation: mv-slide-up 0.35s ease-out both;
+}
+.mv-fade-in {
+  animation: mv-fade-in 0.3s ease-out both;
 }
