@@ -1,144 +1,123 @@
 'use client';
 
-import { useState } from 'react';
-import NFCGateScreen from '@/components/lyfvault/NFCGateScreen';
-import OnboardingScreen from '@/components/lyfvault/OnboardingScreen';
-import DualLoginScreen from '@/components/lyfvault/DualLoginScreen';
-import EmergencyBypassScreen from '@/components/lyfvault/EmergencyBypassScreen';
-import DashboardScreen from '@/components/lyfvault/DashboardScreen';
-import TimelineScreen from '@/components/lyfvault/TimelineScreen';
-import SettingsScreen from '@/components/lyfvault/SettingsScreen';
+import { useState, useEffect } from 'react';
+import { storage, UserSession } from '@/lib/storage';
+import RegistrationScreen from '@/components/premium/RegistrationScreen';
+import LoginScreen from '@/components/premium/LoginScreen';
+import DashboardScreen from '@/components/premium/DashboardScreen';
+import MedicalReportsScreen from '@/components/premium/MedicalReportsScreen';
+import DoctorUploadScreen from '@/components/premium/DoctorUploadScreen';
 
-export type UserRole = 'OWNER' | 'DOCTOR' | 'BYSTANDER' | null;
-
-interface AppState {
-  currentScreen: 'NFC_GATE' | 'ONBOARDING' | 'LOGIN' | 'EMERGENCY' | 'DASHBOARD' | 'TIMELINE' | 'SETTINGS';
-  userRole: UserRole;
-  isChildProfile: boolean;
-  patientName: string;
-  patientAge: number;
-  doctorName: string;
-  nfcScanned: boolean;
-  termsAccepted: boolean;
-  tAndCModal: boolean;
-  qrScannerOpen: boolean;
-  uploadError: boolean;
-  uploadRetrying: boolean;
-}
+type ScreenType = 'registration' | 'login' | 'dashboard' | 'reports' | 'upload';
 
 export default function App() {
-  const [state, setState] = useState<AppState>({
-    currentScreen: 'NFC_GATE',
-    userRole: null,
-    isChildProfile: false,
-    patientName: 'Sarah Johnson',
-    patientAge: 8,
-    doctorName: '',
-    nfcScanned: false,
-    termsAccepted: false,
-    tAndCModal: false,
-    qrScannerOpen: false,
-    uploadError: false,
-    uploadRetrying: false,
-  });
+  const [currentScreen, setCurrentScreen] = useState<ScreenType>('registration');
+  const [session, setSession] = useState<UserSession | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const updateState = (updates: Partial<AppState>) => {
-    setState(prev => ({ ...prev, ...updates }));
+  useEffect(() => {
+    // Check if user has an active session
+    const existingSession = storage.getSession();
+    if (existingSession) {
+      setSession(existingSession);
+      setCurrentScreen('dashboard');
+    }
+    setIsLoading(false);
+  }, []);
+
+  if (isLoading) {
+    return (
+      <main className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
+        <div className="w-full max-w-md">
+          <div className="animate-pulse flex flex-col gap-4">
+            <div className="h-32 bg-slate-200 dark:bg-slate-700 rounded-2xl"></div>
+            <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded"></div>
+            <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded w-3/4"></div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const handleRegistration = (email: string, password: string, fullName: string, age: number) => {
+    const newUser = {
+      id: 'user_' + Date.now(),
+      email,
+      password,
+      fullName,
+      age,
+      bloodGroup: 'O+',
+      allergies: ['Penicillin'],
+      createdAt: new Date().toISOString(),
+    };
+    storage.saveUser(newUser);
+    setCurrentScreen('login');
+  };
+
+  const handleLogin = (email: string, password: string) => {
+    const user = storage.getUser();
+    if (user && user.email === email && user.password === password) {
+      const newSession = {
+        userId: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        loggedInAt: new Date().toISOString(),
+      };
+      storage.saveSession(newSession);
+      setSession(newSession);
+      setCurrentScreen('dashboard');
+    }
+  };
+
+  const handleLogout = () => {
+    storage.clearSession();
+    setSession(null);
+    setCurrentScreen('login');
   };
 
   const renderScreen = () => {
-    switch (state.currentScreen) {
-      case 'NFC_GATE':
+    switch (currentScreen) {
+      case 'registration':
         return (
-          <NFCGateScreen
-            nfcScanned={state.nfcScanned}
-            termsAccepted={state.termsAccepted}
-            tAndCModalOpen={state.tAndCModal}
-            onNFCScan={() => updateState({ nfcScanned: true })}
-            onTermsAccept={() => updateState({ termsAccepted: true, tAndCModal: false })}
-            onOpenTerms={() => updateState({ tAndCModal: true })}
-            onCloseTerms={() => updateState({ tAndCModal: false })}
-            onProceed={() => updateState({ currentScreen: 'ONBOARDING', nfcScanned: false, termsAccepted: false })}
+          <RegistrationScreen
+            onRegister={handleRegistration}
+            onSwitchToLogin={() => setCurrentScreen('login')}
           />
         );
 
-      case 'ONBOARDING':
+      case 'login':
         return (
-          <OnboardingScreen
-            isChildProfile={state.isChildProfile}
-            onSelectProfile={(isChild) => {
-              updateState({ isChildProfile: isChild, currentScreen: 'LOGIN' });
-            }}
+          <LoginScreen
+            onLogin={handleLogin}
+            onSwitchToRegistration={() => setCurrentScreen('registration')}
           />
         );
 
-      case 'LOGIN':
-        return (
-          <DualLoginScreen
-            isChildProfile={state.isChildProfile}
-            onLoginAsOwner={() => updateState({ userRole: 'OWNER', currentScreen: 'DASHBOARD' })}
-            onLoginAsDoctor={() => {
-              updateState({ userRole: 'DOCTOR', currentScreen: 'TIMELINE', qrScannerOpen: true });
-            }}
-            onGoToEmergency={() => updateState({ currentScreen: 'EMERGENCY' })}
-          />
-        );
-
-      case 'EMERGENCY':
-        return (
-          <EmergencyBypassScreen
-            onCallEmergency={() => {
-              updateState({ currentScreen: 'DASHBOARD', userRole: 'BYSTANDER' });
-            }}
-            onCancel={() => updateState({ currentScreen: 'LOGIN' })}
-          />
-        );
-
-      case 'DASHBOARD':
+      case 'dashboard':
         return (
           <DashboardScreen
-            userRole={state.userRole}
-            patientName={state.patientName}
-            isChildProfile={state.isChildProfile}
-            onViewTimeline={() => updateState({ currentScreen: 'TIMELINE' })}
-            onGoToSettings={() => updateState({ currentScreen: 'SETTINGS' })}
-            onLogout={() => updateState({ currentScreen: 'LOGIN', userRole: null })}
+            user={session}
+            onViewReports={() => setCurrentScreen('reports')}
+            onUploadReport={() => setCurrentScreen('upload')}
+            onLogout={handleLogout}
           />
         );
 
-      case 'TIMELINE':
+      case 'reports':
         return (
-          <TimelineScreen
-            userRole={state.userRole}
-            qrScannerOpen={state.qrScannerOpen}
-            uploadError={state.uploadError}
-            uploadRetrying={state.uploadRetrying}
-            doctorName={state.doctorName}
-            onOpenQRScanner={() => updateState({ qrScannerOpen: true })}
-            onCloseQRScanner={() => updateState({ qrScannerOpen: false })}
-            onScanQR={(name) => {
-              updateState({ doctorName: name, qrScannerOpen: false, uploadError: false });
-            }}
-            onRetryUpload={() => {
-              updateState({ uploadRetrying: true });
-              setTimeout(() => {
-                updateState({ uploadRetrying: false, uploadError: false });
-              }, 1500);
-            }}
-            onTriggerError={() => updateState({ uploadError: true, uploadRetrying: false })}
-            onDismissError={() => updateState({ uploadError: false })}
-            onGoToDashboard={() => updateState({ currentScreen: 'DASHBOARD' })}
+          <MedicalReportsScreen
+            user={session}
+            onBack={() => setCurrentScreen('dashboard')}
+            onUploadNew={() => setCurrentScreen('upload')}
           />
         );
 
-      case 'SETTINGS':
+      case 'upload':
         return (
-          <SettingsScreen
-            isChildProfile={state.isChildProfile}
-            userRole={state.userRole}
-            patientName={state.patientName}
-            onLogout={() => updateState({ currentScreen: 'LOGIN', userRole: null, isChildProfile: false })}
-            onGoToDashboard={() => updateState({ currentScreen: 'DASHBOARD' })}
+          <DoctorUploadScreen
+            user={session}
+            onBack={() => setCurrentScreen('reports')}
+            onSuccess={() => setCurrentScreen('reports')}
           />
         );
 
@@ -148,9 +127,9 @@ export default function App() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-background via-background to-secondary/20">
-      <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="w-full max-w-md bg-white dark:bg-card rounded-3xl shadow-2xl dark:shadow-2xl overflow-hidden">
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-4">
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-full max-w-md">
           {renderScreen()}
         </div>
       </div>
