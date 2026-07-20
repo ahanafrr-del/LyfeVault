@@ -66,7 +66,7 @@ export function Dashboard({
   const primaryContact = user.contacts[0]
 
   return (
-    <div className="w-full bg-secondary pb-6">
+    <div className="w-full bg-secondary pb-10">
       {/* Top bar */}
       <div className="sticky top-0 z-10 flex items-center gap-3 bg-secondary/90 px-4 py-3.5 backdrop-blur-md">
         <div className="min-w-0 flex-1">

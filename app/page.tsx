@@ -189,7 +189,7 @@ export default function Page() {
 
 function PhoneFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative h-screen w-full overflow-hidden bg-card sm:h-[812px] sm:w-[390px] sm:rounded-[2.5rem] sm:border-8 sm:border-foreground/90 sm:shadow-2xl">
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-card sm:h-[min(812px,calc(100dvh-3rem))] sm:w-[390px] sm:rounded-[2.5rem] sm:border-8 sm:border-foreground/90 sm:shadow-2xl">
       <div className="relative h-full w-full overflow-hidden">{children}</div>
     </div>
   )
