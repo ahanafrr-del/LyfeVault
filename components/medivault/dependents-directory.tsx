@@ -17,6 +17,7 @@ import {
   Baby,
   Trash2,
   Tag,
+  ShieldCheck,
 } from "lucide-react"
 import { ScreenHeader, ModalShell, EmptyState } from "./shared"
 import {
@@ -40,6 +41,7 @@ type FormState = {
   contactPhone: string
   assignedEmail: string
   assignedPassword: string
+  parentalSecretCode: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -53,6 +55,7 @@ const EMPTY_FORM: FormState = {
   contactPhone: "",
   assignedEmail: "",
   assignedPassword: "",
+  parentalSecretCode: "",
 }
 
 function splitList(value: string): string[] {
@@ -75,10 +78,24 @@ export function DependentsDirectory({
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  // Step within the add flow: "details" collects profile + child credentials,
+  // "code" prompts the guardian to create the 4-digit Parental Secret Code.
+  const [step, setStep] = useState<"details" | "code">("details")
+  const [error, setError] = useState<string | null>(null)
+
+  function closeModal() {
+    setModalOpen(false)
+    setForm(EMPTY_FORM)
+    setEditingId(null)
+    setStep("details")
+    setError(null)
+  }
 
   function openAdd() {
     setEditingId(null)
     setForm(EMPTY_FORM)
+    setStep("details")
+    setError(null)
     setModalOpen(true)
   }
 
@@ -95,7 +112,10 @@ export function DependentsDirectory({
       contactPhone: dep.contacts[0]?.phone ?? "",
       assignedEmail: dep.assignedEmail,
       assignedPassword: dep.assignedPassword,
+      parentalSecretCode: dep.parentalSecretCode ?? "",
     })
+    setStep("details")
+    setError(null)
     setModalOpen(true)
   }
 
@@ -103,8 +123,7 @@ export function DependentsDirectory({
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  function handleSave() {
-    if (!form.name.trim()) return
+  function buildPayload(parentalSecretCode: string) {
     const contacts =
       form.contactName.trim() || form.contactPhone.trim()
         ? [
@@ -117,7 +136,7 @@ export function DependentsDirectory({
           ]
         : []
 
-    const payload = {
+    return {
       name: form.name.trim(),
       dob: form.dob,
       relationship: form.relationship || "Child",
@@ -127,23 +146,39 @@ export function DependentsDirectory({
       contacts,
       assignedEmail: form.assignedEmail.trim().toLowerCase(),
       assignedPassword: form.assignedPassword,
+      parentalSecretCode,
     }
+  }
 
-    if (editingId) {
-      store.updateDependent(editingId, payload)
-    } else {
-      store.addDependent(payload)
+  // Editing an existing dependent saves immediately (credentials already verified on link).
+  function handleUpdate() {
+    if (!editingId || !form.name.trim()) return
+    store.updateDependent(editingId, buildPayload(form.parentalSecretCode))
+    closeModal()
+  }
+
+  // Step 1 of linking: validate the child's credentials against the local users DB.
+  function handleVerifyAndContinue() {
+    setError(null)
+    if (!form.name.trim()) return setError("Enter the dependent's full name.")
+    const res = store.verifyCredentials(form.assignedEmail, form.assignedPassword)
+    if (!res.ok) return setError(res.error ?? "Could not verify the child's account.")
+    setStep("code")
+  }
+
+  // Step 2 of linking: store the guardian-created 4-digit Parental Secret Code.
+  function handleConfirmCode() {
+    setError(null)
+    if (!/^\d{4}$/.test(form.parentalSecretCode)) {
+      return setError("The Parental Secret Code must be exactly 4 digits.")
     }
-    setModalOpen(false)
-    setForm(EMPTY_FORM)
-    setEditingId(null)
+    store.addDependent(buildPayload(form.parentalSecretCode))
+    closeModal()
   }
 
   function handleDelete() {
     if (editingId) store.removeDependent(editingId)
-    setModalOpen(false)
-    setForm(EMPTY_FORM)
-    setEditingId(null)
+    closeModal()
   }
 
   return (
@@ -218,11 +253,78 @@ export function DependentsDirectory({
 
       {modalOpen && (
         <ModalShell
-          title={editingId ? "Edit Dependent Profile" : "Add a New Dependent"}
-          subtitle={editingId ? "Update medical & tag parameters" : "Create a linked family passport"}
+          title={
+            editingId
+              ? "Edit Dependent Profile"
+              : step === "code"
+                ? "Set Parental Secret Code"
+                : "Add a New Dependent"
+          }
+          subtitle={
+            editingId
+              ? "Update medical & tag parameters"
+              : step === "code"
+                ? "Authorize this linked dependent"
+                : "Create a linked family passport"
+          }
           headerAccent
-          onClose={() => setModalOpen(false)}
+          onClose={closeModal}
         >
+          {step === "code" && !editingId ? (
+            <div className="space-y-5 p-5">
+              <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                <div className="mb-2 flex items-center gap-2 text-primary">
+                  <ShieldCheck className="h-5 w-5" />
+                  <p className="text-sm font-bold">Child account verified</p>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="font-semibold text-foreground">
+                    {form.assignedEmail.trim().toLowerCase()}
+                  </span>{" "}
+                  matched a registered account. Create a 4-digit secret code that only you will use
+                  to unlock edit access on this dependent&apos;s dashboard.
+                </p>
+              </div>
+
+              <FormField label="4-Digit Parental Secret Code" icon={<KeyRound className="h-4 w-4" />}>
+                <input
+                  inputMode="numeric"
+                  maxLength={4}
+                  className={`${INPUT} tracking-[0.5em]`}
+                  placeholder="••••"
+                  value={form.parentalSecretCode}
+                  onChange={(e) => set("parentalSecretCode", e.target.value.replace(/\D/g, "").slice(0, 4))}
+                />
+              </FormField>
+
+              {error && (
+                <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep("details")
+                    setError(null)
+                  }}
+                  className="flex-1 rounded-xl border border-border bg-card py-3 text-sm font-semibold text-foreground transition hover:bg-secondary"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmCode}
+                  className="flex-1 rounded-xl bg-accent py-3 text-sm font-bold text-accent-foreground shadow-lg shadow-accent/25 transition hover:brightness-110"
+                >
+                  Approve & Link
+                </button>
+              </div>
+            </div>
+          ) : (
           <div className="space-y-4 p-5">
             <FormField label="Full Name" icon={<User className="h-4 w-4" />}>
               <input
@@ -338,10 +440,17 @@ export function DependentsDirectory({
                 </FormField>
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                Master recovery stays with the guardian. These credentials enable subsequent minor
-                view-only sign-in.
+                Enter the child&apos;s existing account email and password. We verify them against
+                the vault before linking, then you&apos;ll set a Parental Secret Code.
               </p>
             </div>
+
+            {error && !editingId && (
+              <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
             {/* Dual-button row */}
             <div className="flex gap-3 pt-1">
@@ -354,10 +463,10 @@ export function DependentsDirectory({
               </button>
               <button
                 type="button"
-                onClick={handleSave}
+                onClick={editingId ? handleUpdate : handleVerifyAndContinue}
                 className="flex-1 rounded-xl bg-accent py-3 text-sm font-bold text-accent-foreground shadow-lg shadow-accent/25 transition hover:brightness-110"
               >
-                Save Profile to Vault
+                {editingId ? "Save Profile to Vault" : "Verify & Continue"}
               </button>
             </div>
 
@@ -372,6 +481,7 @@ export function DependentsDirectory({
               </button>
             )}
           </div>
+          )}
         </ModalShell>
       )}
     </div>

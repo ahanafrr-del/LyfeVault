@@ -35,6 +35,8 @@ export type DependentProfile = {
   /** Guardian-assigned login for subsequent minor view-only access. */
   assignedEmail: string
   assignedPassword: string
+  /** 4-digit parental secret code the guardian uses to unlock edit access on the minor dashboard. */
+  parentalSecretCode: string
   /** Physical paired tag identifier, e.g. "MT-7Q2K". */
   mediTagId: string
 }
@@ -105,7 +107,10 @@ export function makeMediTag(): string {
 
 /** Ensures a stored profile has all newer fields (backfills for older records). */
 function normalizeUser(user: UserProfile): UserProfile {
-  return { ...user, dependents: user.dependents ?? [] }
+  return {
+    ...user,
+    dependents: (user.dependents ?? []).map((d) => ({ ...d, parentalSecretCode: d.parentalSecretCode ?? "" })),
+  }
 }
 
 /**
@@ -126,6 +131,10 @@ export type StoreApi = {
     data: Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password">,
   ) => { ok: boolean; error?: string }
   login: (email: string, password: string) => { ok: boolean; error?: string }
+  /** Verifies an email + password pair against the local users database (no session change). */
+  verifyCredentials: (email: string, password: string) => { ok: boolean; error?: string }
+  /** Finds a linked dependent record (across all guardians) by its assigned login email. */
+  getDependentByEmail: (email: string) => DependentProfile | null
   logout: () => void
   resetAll: () => void
   addReport: (report: Omit<MedicalReport, "id" | "createdAt">) => void
@@ -197,6 +206,27 @@ export function useStore(): StoreApi {
     },
     [persist],
   )
+
+  const verifyCredentials: StoreApi["verifyCredentials"] = useCallback((email, password) => {
+    const key = email.trim().toLowerCase()
+    if (!key || !password) return { ok: false, error: "Enter the child's email and password." }
+    const existing = readDb()
+    const user = existing.users[key]
+    if (!user) return { ok: false, error: "No account found for this email." }
+    if (user.password !== password) return { ok: false, error: "Incorrect password for this account." }
+    return { ok: true }
+  }, [])
+
+  const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback((email) => {
+    const key = email.trim().toLowerCase()
+    if (!key) return null
+    const existing = readDb()
+    for (const u of Object.values(existing.users)) {
+      const match = (u.dependents ?? []).find((d) => d.assignedEmail.trim().toLowerCase() === key)
+      if (match) return { ...match, parentalSecretCode: match.parentalSecretCode ?? "" }
+    }
+    return null
+  }, [])
 
   const logout: StoreApi["logout"] = useCallback(() => {
     const existing = readDb()
@@ -287,6 +317,8 @@ export function useStore(): StoreApi {
     emergencyProfile,
     register,
     login,
+    verifyCredentials,
+    getDependentByEmail,
     logout,
     resetAll,
     addReport,

@@ -133,7 +133,11 @@ export default function Page() {
               {tab === "home" &&
                 (minor ? (
                   // Screen 3b — strict view-only layout, no bento grid, no FAB.
-                  <MinorDashboard user={user} onNotifications={() => setTab("notifications")} />
+                  <MinorDashboard
+                    store={store}
+                    user={user}
+                    onNotifications={() => setTab("notifications")}
+                  />
                 ) : (
                   <Dashboard
                     user={user}
