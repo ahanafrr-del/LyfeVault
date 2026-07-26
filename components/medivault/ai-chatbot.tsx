@@ -17,7 +17,7 @@ export function AiChatbot({
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "bot",
-      text: `Hi ${user.name.split(" ")[0] || "there"}! I'm your MediVault assistant. Ask me about your allergies, medications, blood group, or reports.`,
+      text: `Hi ${user.name.split(" ")[0] || "there"}! I'm your LyfeVault assistant. Ask me about your allergies, medications, blood group, or reports.`,
     },
   ])
   const [input, setInput] = useState("")

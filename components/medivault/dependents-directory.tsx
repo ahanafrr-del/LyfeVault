@@ -23,6 +23,7 @@ import { ScreenHeader, ModalShell, EmptyState } from "./shared"
 import {
   computeAge,
   uid,
+  validateParentalCode,
   BLOOD_GROUPS,
   RELATIONSHIPS,
   type DependentProfile,

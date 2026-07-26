@@ -25,7 +25,7 @@ export function Logo({
       <span
         className={`${text} font-bold tracking-tight ${light ? "text-white" : "text-primary"}`}
       >
-        Medi<span className={light ? "text-white" : "text-accent"}>Vault</span>
+        Lyfe<span className={light ? "text-white" : "text-accent"}>Vault</span>
       </span>
     </div>
   )

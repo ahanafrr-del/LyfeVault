@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'MediVault - Your Health, Secured',
+  title: 'LyfeVault - Your Health, Secured',
   description: 'A secure digital medical passport with NFC/QR entry, emergency access, medical timeline, doctor uploads, and AI health insights.',
   generator: 'v0.app',
   icons: {

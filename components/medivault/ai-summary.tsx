@@ -53,7 +53,7 @@ export function AiSummary({
         <div className="flex items-center gap-3 rounded-2xl bg-accent/10 p-4">
           <Sparkles className="h-6 w-6 shrink-0 text-accent" />
           <p className="text-sm leading-relaxed text-foreground">
-            Here is a concise, AI-generated overview of your MediVault profile that you can share with a
+            Here is a concise, AI-generated overview of your LyfeVault profile that you can share with a
             provider.
           </p>
         </div>

@@ -17,9 +17,11 @@ import { AiChatbot } from "@/components/medivault/ai-chatbot"
 import { AiSummary } from "@/components/medivault/ai-summary"
 import { DoctorUpload } from "@/components/medivault/doctor-upload"
 import { ProfileScreen } from "@/components/medivault/profile-screen"
+import { ClinicalMode } from "@/components/medivault/clinical-mode"
+import type { PractitionerSession } from "@/components/medivault/practitioner-scan"
 import { ScreenHeader, EmptyState } from "@/components/medivault/shared"
 
-type Stage = "splash" | "auth" | "segment" | "emergency" | "app"
+type Stage = "splash" | "auth" | "segment" | "emergency" | "app" | "clinical"
 type Overlay = "chatbot" | "summary" | "upload" | null
 type SubScreen = "departments" | "dependents" | null
 
@@ -29,6 +31,8 @@ export default function Page() {
   const [tab, setTab] = useState<MainTab>("home")
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [subScreen, setSubScreen] = useState<SubScreen>(null)
+  // Verified practitioner session powering Approved Clinical Mode.
+  const [practitioner, setPractitioner] = useState<PractitionerSession | null>(null)
 
   const user = store.currentUser
   const minor = isChildProfile(user)
@@ -86,6 +90,23 @@ export default function Page() {
           store={store}
           onAuthed={(mode) => setStage(mode === "signup" ? "segment" : "app")}
           onEmergency={() => setStage("emergency")}
+          onPractitioner={(session) => {
+            setPractitioner(session)
+            setStage("clinical")
+          }}
+        />
+      )
+    }
+
+    if (stage === "clinical" && practitioner) {
+      return (
+        <ClinicalMode
+          store={store}
+          session={practitioner}
+          onExit={() => {
+            setPractitioner(null)
+            setStage("auth")
+          }}
         />
       )
     }
@@ -113,6 +134,10 @@ export default function Page() {
           store={store}
           onAuthed={(mode) => setStage(mode === "signup" ? "segment" : "app")}
           onEmergency={() => setStage("emergency")}
+          onPractitioner={(session) => {
+            setPractitioner(session)
+            setStage("clinical")
+          }}
         />
       )
     }

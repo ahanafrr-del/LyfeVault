@@ -136,6 +136,30 @@ export function validateParentalCode(code: string): { ok: boolean; error?: strin
 }
 
 /**
+ * Simulated medical-credential verification engine. Approves only when the scanned
+ * document yields a plausible practitioner name, a valid registration/license number
+ * format, and a recognized medical council or hospital/clinic institution.
+ */
+export function validateMedicalLicense(input: {
+  doctorName: string
+  registrationNumber: string
+  institution: string
+}): { ok: boolean; error?: string } {
+  const denied = { ok: false, error: "\u26D4 Approval Denied: Unverified or Invalid Medical License Credentials." }
+  const name = input.doctorName.trim()
+  const reg = input.registrationNumber.trim()
+  const inst = input.institution.trim()
+
+  if (!name || name.replace(/[^A-Za-z]/g, "").length < 3) return denied
+  // Registration number: optional council prefix (letters) then at least 4 digits.
+  if (!/^[A-Za-z]{0,6}[-/ ]?\d{4,}$/.test(reg)) return denied
+  // Institution must reference a recognized council or a clinical facility.
+  const registry = /(nmc|mci|smc|medical council|state medical|council|hospital|clinic|medical|health)/i
+  if (!registry.test(inst)) return denied
+  return { ok: true }
+}
+
+/**
  * A profile belongs to a minor (child) when the user is under 18.
  * Minors get read-only access; adults (18+) can edit their records.
  */
@@ -150,9 +174,15 @@ export type StoreApi = {
   currentUser: UserProfile | null
   emergencyProfile: UserProfile | null
   register: (
-    data: Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password">,
+    data: Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">,
   ) => { ok: boolean; error?: string }
   login: (email: string, password: string) => { ok: boolean; error?: string }
+  /** Quick Card login: authenticates using the physical Card/Tag ID + password. */
+  loginByCard: (cardId: string, password: string) => { ok: boolean; error?: string }
+  /** Looks up a registered user by their physical Card/Tag ID (for emergency snapshots). */
+  getUserByCardId: (cardId: string) => UserProfile | null
+  /** Attaches a clinical report to the record identified by a Card/Tag ID (no session change). */
+  addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">) => { ok: boolean; error?: string }
   /** Verifies an email + password pair against the local users database (no session change). */
   verifyCredentials: (email: string, password: string) => { ok: boolean; error?: string }
   /** Finds a linked dependent record (across all guardians) by its assigned login email. */
@@ -199,6 +229,7 @@ export function useStore(): StoreApi {
         gender: data.gender,
         email,
         password: data.password,
+        cardId: (data.cardId ?? "").trim() || makeCardId(),
         allergies: [],
         conditions: [],
         medications: [],
@@ -224,6 +255,50 @@ export function useStore(): StoreApi {
       if (!user) return { ok: false, error: "No account found for this email." }
       if (user.password !== password) return { ok: false, error: "Incorrect password." }
       persist({ ...existing, session: key })
+      return { ok: true }
+    },
+    [persist],
+  )
+
+  const loginByCard: StoreApi["loginByCard"] = useCallback(
+    (cardId, password) => {
+      const key = cardId.trim().toLowerCase()
+      if (!key) return { ok: false, error: "Enter your Card/Tag ID." }
+      const existing = readDb()
+      const entry = Object.entries(existing.users).find(
+        ([, u]) => (u.cardId ?? "").trim().toLowerCase() === key,
+      )
+      if (!entry) return { ok: false, error: "No account found for this Card/Tag ID." }
+      const [email, user] = entry
+      if (user.password !== password) return { ok: false, error: "Incorrect password." }
+      persist({ ...existing, session: email })
+      return { ok: true }
+    },
+    [persist],
+  )
+
+  const getUserByCardId: StoreApi["getUserByCardId"] = useCallback((cardId) => {
+    const key = cardId.trim().toLowerCase()
+    if (!key) return null
+    const existing = readDb()
+    const match = Object.values(existing.users).find(
+      (u) => (u.cardId ?? "").trim().toLowerCase() === key,
+    )
+    return match ? normalizeUser(match) : null
+  }, [])
+
+  const addReportToCard: StoreApi["addReportToCard"] = useCallback(
+    (cardId, report) => {
+      const key = cardId.trim().toLowerCase()
+      const existing = readDb()
+      const entry = Object.entries(existing.users).find(
+        ([, u]) => (u.cardId ?? "").trim().toLowerCase() === key,
+      )
+      if (!entry) return { ok: false, error: "No patient found for this Card/Tag ID." }
+      const [email, user] = entry
+      const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
+      const updated: UserProfile = { ...normalizeUser(user), reports: [newReport, ...user.reports] }
+      persist({ ...existing, users: { ...existing.users, [email]: updated } })
       return { ok: true }
     },
     [persist],
@@ -339,6 +414,9 @@ export function useStore(): StoreApi {
     emergencyProfile,
     register,
     login,
+    loginByCard,
+    getUserByCardId,
+    addReportToCard,
     verifyCredentials,
     getDependentByEmail,
     logout,

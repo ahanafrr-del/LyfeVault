@@ -31,7 +31,7 @@ export function SplashScreen({
           </span>
           <span className="block">
             <span className="block text-5xl font-black tracking-tight drop-shadow-sm">
-              Medi<span className="text-accent">Vault</span>
+              Lyfe<span className="text-accent">Vault</span>
             </span>
             <span className="mt-3 block text-sm font-medium text-primary-foreground/80">
               Your health records, secured and always with you.

@@ -2,6 +2,7 @@
 
 import { AlertTriangle, Phone, HeartPulse, Pill, Activity, UserX } from "lucide-react"
 import { ScreenHeader, EmptyState } from "./shared"
+import { EmergencyServices } from "./emergency-services"
 import { computeAge, type UserProfile } from "@/lib/store"
 
 export function EmergencyView({
@@ -29,7 +30,7 @@ export function EmergencyView({
         <EmptyState
           icon={<UserX className="h-7 w-7" />}
           title="No patient record found"
-          hint="This MediVault card has not been registered yet. Please sign up to create a profile."
+          hint="This LyfeVault card has not been registered yet. Please sign up to create a profile."
         />
       ) : (
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -108,6 +109,9 @@ export function EmergencyView({
               </ul>
             )}
           </div>
+
+          {/* Proximity-based emergency dispatch */}
+          <EmergencyServices />
         </div>
       )}
     </div>
