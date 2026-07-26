@@ -51,10 +51,13 @@ export function MinorDashboard({
   store,
   user,
   onNotifications,
+  onEditModeChange,
 }: {
   store: StoreApi
   user: UserProfile
   onNotifications: () => void
+  /** Notifies the parent shell when parental edit mode toggles, so it can show the upload FAB. */
+  onEditModeChange?: (unlocked: boolean) => void
 }) {
   const firstName = user.name.split(" ")[0] || "there"
   const age = computeAge(user.dob)
@@ -95,6 +98,7 @@ export function MinorDashboard({
     }
     setDraft(toDraft(user))
     setEditMode(true)
+    onEditModeChange?.(true)
     setPinOpen(false)
   }
 
@@ -114,6 +118,7 @@ export function MinorDashboard({
 
   function lockProfile() {
     setEditMode(false)
+    onEditModeChange?.(false)
     setSavedFlash(false)
   }
 
@@ -417,7 +422,7 @@ export function MinorDashboard({
       {pinOpen && (
         <ModalShell
           title="Parental Master Access"
-          subtitle="Enter the 4-digit secret code"
+          subtitle="Enter the 5-12 character secret code"
           headerAccent
           onClose={() => setPinOpen(false)}
         >
@@ -439,14 +444,14 @@ export function MinorDashboard({
                   <KeyRound className="h-4 w-4" />
                 </span>
                 <input
-                  inputMode="numeric"
-                  maxLength={4}
+                  type="text"
+                  maxLength={12}
                   autoFocus
-                  className={`${SELECT} pl-10 tracking-[0.5em]`}
-                  placeholder="••••"
+                  className={`${SELECT} pl-10 tracking-widest`}
+                  placeholder="Secret code"
                   value={pin}
                   onChange={(e) => {
-                    setPin(e.target.value.replace(/\D/g, "").slice(0, 4))
+                    setPin(e.target.value.slice(0, 12))
                     setPinError(null)
                   }}
                   onKeyDown={(e) => {

@@ -236,7 +236,7 @@ export function AuthScreen({
           className="flex w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-card py-3 text-sm font-bold text-primary shadow-sm transition hover:bg-primary/5"
         >
           <Stethoscope className="h-5 w-5" />
-          Practitioner / Medical License Quick Login
+          {"\uD83E\uDE7A Doctor / Practitioner Access"}
         </button>
       </div>
 

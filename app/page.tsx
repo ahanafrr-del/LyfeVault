@@ -33,6 +33,8 @@ export default function Page() {
   const [subScreen, setSubScreen] = useState<SubScreen>(null)
   // Verified practitioner session powering Approved Clinical Mode.
   const [practitioner, setPractitioner] = useState<PractitionerSession | null>(null)
+  // True once a guardian unlocks parental edit mode on a minor's dashboard — reveals the upload FAB.
+  const [minorUnlocked, setMinorUnlocked] = useState(false)
 
   const user = store.currentUser
   const minor = isChildProfile(user)
@@ -43,6 +45,7 @@ export default function Page() {
     setTab("home")
     setSubScreen(null)
     setOverlay(null)
+    setMinorUnlocked(false)
   }
 
   function handleDashboardAction(action: DashboardAction) {
@@ -77,6 +80,7 @@ export default function Page() {
     setTab("home")
     setSubScreen(null)
     setOverlay(null)
+    setMinorUnlocked(false)
   }
 
   function renderPhoneContent() {
@@ -162,6 +166,7 @@ export default function Page() {
                     store={store}
                     user={user}
                     onNotifications={() => setTab("notifications")}
+                    onEditModeChange={setMinorUnlocked}
                   />
                 ) : (
                   <Dashboard
@@ -192,10 +197,10 @@ export default function Page() {
           active={tab}
           onNavigate={setTab}
           onAdd={() => setOverlay("upload")}
-          showAdd={!minor}
+          showAdd={!minor || (minorUnlocked && tab === "home")}
         />
 
-        {overlay === "upload" && !minor && (
+        {overlay === "upload" && (!minor || minorUnlocked) && (
           <DoctorUpload
             store={store}
             onClose={() => setOverlay(null)}
