@@ -64,17 +64,9 @@ export function AuthScreen({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-secondary px-6 pb-8 pt-8">
-      {/* Top title bar with prominent Emergency Access button beside the app title */}
-      <div className="flex items-center justify-between gap-2">
+      {/* Top title bar with app logo */}
+      <div className="flex items-center justify-start gap-2">
         <Logo size="md" />
-        <button
-          type="button"
-          onClick={() => setLookupOpen(true)}
-          className="flex shrink-0 items-center gap-1.5 rounded-full bg-destructive px-3 py-2 text-xs font-bold text-white shadow-lg shadow-destructive/30 transition hover:brightness-105"
-        >
-          <Ambulance className="h-4 w-4" />
-          Emergency Access
-        </button>
       </div>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
