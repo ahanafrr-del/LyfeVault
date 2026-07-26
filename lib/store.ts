@@ -35,7 +35,7 @@ export type DependentProfile = {
   /** Guardian-assigned login for subsequent minor view-only access. */
   assignedEmail: string
   assignedPassword: string
-  /** 4-digit parental secret code the guardian uses to unlock edit access on the minor dashboard. */
+  /** Strong parental secret code (5-12 chars incl. uppercase, number, special) unlocking edit access on the minor dashboard. */
   parentalSecretCode: string
   /** Physical paired tag identifier, e.g. "MT-7Q2K". */
   mediTagId: string
@@ -48,6 +48,8 @@ export type UserProfile = {
   gender: string
   email: string
   password: string
+  /** Physical Card/Tag ID printed on the user's card, used for Quick Card login and emergency lookup. */
+  cardId: string
   allergies: string[]
   conditions: string[]
   medications: string[]
@@ -109,8 +111,28 @@ export function makeMediTag(): string {
 function normalizeUser(user: UserProfile): UserProfile {
   return {
     ...user,
+    cardId: user.cardId ?? "",
     dependents: (user.dependents ?? []).map((d) => ({ ...d, parentalSecretCode: d.parentalSecretCode ?? "" })),
   }
+}
+
+/** Generates a fallback physical Card/Tag ID like "LV-8H3N2" when a user does not supply one. */
+export function makeCardId(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+  let code = ""
+  for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)]
+  return `LV-${code}`
+}
+
+/** Client-side strength check for the parental secret code: 5-12 chars, 1 uppercase, 1 number, 1 special. */
+export function validateParentalCode(code: string): { ok: boolean; error?: string } {
+  if (code.length < 5 || code.length > 12) {
+    return { ok: false, error: "Code must be 5 to 12 characters long." }
+  }
+  if (!/[A-Z]/.test(code)) return { ok: false, error: "Add at least one uppercase letter." }
+  if (!/[0-9]/.test(code)) return { ok: false, error: "Add at least one number." }
+  if (!/[^A-Za-z0-9]/.test(code)) return { ok: false, error: "Add at least one special character (e.g. @, #, $)." }
+  return { ok: true }
 }
 
 /**
