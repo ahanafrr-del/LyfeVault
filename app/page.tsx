@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { Bell } from "lucide-react"
-import { useStore, isChildProfile } from "@/lib/store"
+import { useStore, isChildProfile, type UserProfile } from "@/lib/store"
 import { SplashScreen } from "@/components/medivault/splash-screen"
 import { AuthScreen } from "@/components/medivault/auth-screen"
 import { SegmentationScreen } from "@/components/medivault/segmentation-screen"
@@ -35,6 +35,9 @@ export default function Page() {
   const [practitioner, setPractitioner] = useState<PractitionerSession | null>(null)
   // True once a guardian unlocks parental edit mode on a minor's dashboard — reveals the upload FAB.
   const [minorUnlocked, setMinorUnlocked] = useState(false)
+  // A specific profile resolved via the top-bar Card/Tag ID lookup. When set, the Emergency
+  // View (Screen 2) renders this responder-targeted record instead of the local snapshot.
+  const [emergencyTarget, setEmergencyTarget] = useState<UserProfile | null>(null)
 
   const user = store.currentUser
   const minor = isChildProfile(user)
@@ -83,6 +86,13 @@ export default function Page() {
     setMinorUnlocked(false)
   }
 
+  // Opens the read-only Emergency View (Screen 2). When called with a profile resolved from a
+  // Card/Tag ID lookup, that exact record is shown; otherwise it falls back to the local snapshot.
+  function handleEmergency(profile?: UserProfile | null) {
+    setEmergencyTarget(profile ?? null)
+    setStage("emergency")
+  }
+
   function renderPhoneContent() {
     if (stage === "splash") {
       return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
@@ -93,7 +103,7 @@ export default function Page() {
         <AuthScreen
           store={store}
           onAuthed={(mode) => setStage(mode === "signup" ? "segment" : "app")}
-          onEmergency={() => setStage("emergency")}
+          onEmergency={handleEmergency}
           onPractitioner={(session) => {
             setPractitioner(session)
             setStage("clinical")
@@ -124,8 +134,11 @@ export default function Page() {
     if (stage === "emergency") {
       return (
         <EmergencyView
-          profile={store.emergencyProfile}
-          onBack={() => setStage(user ? "app" : "auth")}
+          profile={emergencyTarget ?? store.emergencyProfile}
+          onBack={() => {
+            setEmergencyTarget(null)
+            setStage(user ? "app" : "auth")
+          }}
         />
       )
     }
@@ -137,7 +150,7 @@ export default function Page() {
         <AuthScreen
           store={store}
           onAuthed={(mode) => setStage(mode === "signup" ? "segment" : "app")}
-          onEmergency={() => setStage("emergency")}
+          onEmergency={handleEmergency}
           onPractitioner={(session) => {
             setPractitioner(session)
             setStage("clinical")

@@ -5,7 +5,7 @@ import { AlertCircle, Ambulance, Lock, Mail, Calendar, User, Droplet, Tag, Steth
 import { Logo } from "./shared"
 import { PractitionerScan, type PractitionerSession } from "./practitioner-scan"
 import { EmergencyLookupModal } from "./emergency-lookup"
-import type { StoreApi } from "@/lib/store"
+import type { StoreApi, UserProfile } from "@/lib/store"
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
@@ -18,7 +18,8 @@ export function AuthScreen({
   store: StoreApi
   /** mode tells the parent whether to route to the segmentation interstitial (signup) or straight in (login). */
   onAuthed: (mode: "login" | "signup") => void
-  onEmergency: () => void
+  /** Opens the read-only Emergency Profile View. Receives the profile resolved from a Card/Tag ID lookup. */
+  onEmergency: (profile?: UserProfile | null) => void
   /** Called with a verified practitioner session to enter Approved Clinical Mode. */
   onPractitioner: (session: PractitionerSession) => void
 }) {
@@ -64,9 +65,17 @@ export function AuthScreen({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-secondary px-6 pb-8 pt-8">
-      {/* Top title bar with app logo */}
-      <div className="flex items-center justify-start gap-2">
+      {/* Top title bar with app logo + top-right Emergency Access trigger */}
+      <div className="flex items-center justify-between gap-2">
         <Logo size="md" />
+        <button
+          type="button"
+          onClick={() => setLookupOpen(true)}
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-destructive px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-destructive/30 transition hover:brightness-105"
+        >
+          <Ambulance className="h-4 w-4" />
+          Emergency Access
+        </button>
       </div>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
@@ -232,25 +241,6 @@ export function AuthScreen({
         </button>
       </div>
 
-      <div className="mx-auto mt-auto w-full max-w-sm pt-8">
-        <div className="mb-3 flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="h-px flex-1 bg-border" />
-          In an emergency?
-          <span className="h-px flex-1 bg-border" />
-        </div>
-        <button
-          type="button"
-          onClick={onEmergency}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-destructive py-3.5 text-sm font-bold text-white shadow-lg shadow-destructive/30 transition hover:brightness-105"
-        >
-          <Ambulance className="h-5 w-5" />
-          Emergency Access
-        </button>
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          View critical info without logging in
-        </p>
-      </div>
-
       {scanOpen && (
         <PractitionerScan
           onClose={() => setScanOpen(false)}
@@ -261,7 +251,16 @@ export function AuthScreen({
         />
       )}
 
-      {lookupOpen && <EmergencyLookupModal store={store} onClose={() => setLookupOpen(false)} />}
+      {lookupOpen && (
+        <EmergencyLookupModal
+          store={store}
+          onClose={() => setLookupOpen(false)}
+          onFound={(profile) => {
+            setLookupOpen(false)
+            onEmergency(profile)
+          }}
+        />
+      )}
     </div>
   )
 }
