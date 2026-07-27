@@ -1,9 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Tag, ShieldAlert, AlertCircle, UserX, Loader } from "lucide-react"
+import { useState } from "react"
+import { Tag, ShieldAlert, AlertCircle, UserX } from "lucide-react"
 import { ModalShell } from "./shared"
-import { createClient } from "@/lib/supabase/client"
 import type { StoreApi, UserProfile } from "@/lib/store"
 
 /**
@@ -23,96 +22,14 @@ export function EmergencyLookupModal({
 }) {
   const [cardId, setCardId] = useState("")
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const supabase = createClient()
 
-  async function lookup() {
+  function lookup() {
     setError(null)
-    setLoading(true)
-    try {
-      const id = cardId.trim()
-      if (!id) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
-
-      // First try Supabase cloud lookup
-      const { data, error: supabaseError } = await supabase
-        .from("profiles")
-        .select(
-          `
-          id,
-          name,
-          dob,
-          blood_group,
-          gender,
-          email,
-          card_id,
-          allergies,
-          conditions,
-          medications,
-          emergency_contacts:emergency_contacts(id, name, relation, phone),
-          medical_reports:medical_reports(
-            id,
-            doctor_name,
-            specialization,
-            clinic,
-            report_date,
-            report_time,
-            license_number,
-            file_name,
-            notes,
-            created_at
-          )
-        `,
-        )
-        .eq("card_id", id)
-        .single()
-
-      if (supabaseError || !data) {
-        // Fallback to store method
-        const found = await store.getUserByCardId(id)
-        if (!found) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
-        onFound(found)
-        return
-      }
-
-      // Transform Supabase data to UserProfile
-      const profile: UserProfile = {
-        name: data.name,
-        dob: data.dob,
-        bloodGroup: data.blood_group,
-        gender: data.gender,
-        email: data.email,
-        password: "",
-        cardId: data.card_id || "",
-        allergies: data.allergies || [],
-        conditions: data.conditions || [],
-        medications: data.medications || [],
-        contacts: (data.emergency_contacts || []).map((c: any) => ({
-          id: c.id,
-          name: c.name,
-          relation: c.relation,
-          phone: c.phone,
-        })),
-        reports: (data.medical_reports || []).map((r: any) => ({
-          id: r.id,
-          doctorName: r.doctor_name,
-          specialization: r.specialization,
-          clinic: r.clinic,
-          date: r.report_date,
-          time: r.report_time,
-          licenseNumber: r.license_number,
-          fileName: r.file_name,
-          notes: r.notes,
-          createdAt: new Date(r.created_at).getTime(),
-        })),
-        dependents: [],
-      }
-      onFound(profile)
-    } catch (err) {
-      console.error("[v0] Emergency lookup error:", err)
-      setError("⛔ Invalid or Unregistered Card/Tag ID.")
-    } finally {
-      setLoading(false)
-    }
+    const id = cardId.trim()
+    if (!id) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
+    const found = store.getUserByCardId(id)
+    if (!found) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
+    onFound(found)
   }
 
   return (
@@ -165,20 +82,10 @@ export function EmergencyLookupModal({
         <button
           type="button"
           onClick={lookup}
-          disabled={loading}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-destructive py-3 text-sm font-bold text-white shadow-lg shadow-destructive/30 transition hover:brightness-105 disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-destructive py-3 text-sm font-bold text-white shadow-lg shadow-destructive/30 transition hover:brightness-105"
         >
-          {loading ? (
-            <>
-              <Loader className="h-5 w-5 animate-spin" />
-              Looking up profile...
-            </>
-          ) : (
-            <>
-              <AlertCircle className="h-5 w-5" />
-              Access Emergency Profile
-            </>
-          )}
+          <AlertCircle className="h-5 w-5" />
+          Access Emergency Profile
         </button>
       </div>
     </ModalShell>
