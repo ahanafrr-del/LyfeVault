@@ -536,3 +536,25 @@ export const DEPARTMENTS = [
   "Dental",
   "Psychiatry",
 ]
+
+/**
+ * Smart store selector: uses Supabase backend if env vars are configured,
+ * otherwise falls back to localStorage for demo/development.
+ * Import this to get the active store automatically.
+ */
+export function useSmartStore(): StoreApi {
+  // Dynamically import Supabase store only if needed
+  const hasSupabaseConfig =
+    typeof process !== "undefined" &&
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (hasSupabaseConfig) {
+    // Use Supabase backend
+    const { useSupabaseStore } = require("@/lib/store-supabase")
+    return useSupabaseStore()
+  } else {
+    // Fall back to localStorage
+    return useStore()
+  }
+}

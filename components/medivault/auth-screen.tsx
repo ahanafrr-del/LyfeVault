@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { AlertCircle, Ambulance, Lock, Mail, Calendar, User, Droplet, Tag, Stethoscope } from "lucide-react"
+import { useState, useMemo } from "react"
+import { AlertCircle, Ambulance, Lock, Mail, Calendar, User, Droplet, Tag, Stethoscope, AlertTriangle } from "lucide-react"
 import { Logo } from "./shared"
 import { PractitionerScan, type PractitionerSession } from "./practitioner-scan"
 import { EmergencyLookupModal } from "./emergency-lookup"
@@ -45,6 +45,14 @@ export function AuthScreen({
   const [lookupOpen, setLookupOpen] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
 
+  const supabaseConfigured = useMemo(() => {
+    return (
+      typeof window !== "undefined" &&
+      !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    )
+  }, [])
+
   function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
@@ -73,6 +81,20 @@ export function AuthScreen({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-secondary px-6 pb-8 pt-8">
+      {/* Supabase environment configuration banner */}
+      {!supabaseConfigured && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-600">
+          <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
+          <div className="flex-1 text-xs leading-relaxed">
+            <p className="font-semibold mb-1">⚠️ Setup Required</p>
+            <p>
+              Connect your Supabase environment variables in Vercel/v0 Settings {'>'} Vars to enable
+              cloud sync and cross-device access.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Top title bar with app logo + top-right Emergency Access trigger */}
       <div className="flex items-center justify-between gap-2">
         <Logo size="md" />
