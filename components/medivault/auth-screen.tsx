@@ -20,8 +20,8 @@ export function AuthScreen({
   onAuthed: (mode: "login" | "signup") => void
   /** Opens the read-only Emergency Profile View. Receives the profile resolved from a Card/Tag ID lookup. */
   onEmergency: (profile?: UserProfile | null) => void
-  /** Called with a verified practitioner session to enter Approved Clinical Mode. */
-  onPractitioner: (session: PractitionerSession) => void
+  /** Called with a verified practitioner session + the Step-1 patient Card/Tag ID to enter Approved Clinical Mode. */
+  onPractitioner: (session: PractitionerSession, patientCardId: string) => void
 }) {
   const [mode, setMode] = useState<"login" | "signup">("login")
   /** Login can authenticate by email+password or by physical Card/Tag ID + password. */
@@ -54,6 +54,7 @@ export function AuthScreen({
       onAuthed("login")
     } else {
       if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
+      if (!signupCardId.trim()) return setError("Card/Tag ID Number is required to register.")
       const res = store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
       if (!res.ok) return setError(res.error ?? "Sign up failed.")
       onAuthed("signup")
@@ -150,13 +151,15 @@ export function AuthScreen({
             <Field icon={<Tag className="h-4 w-4" />}>
               <input
                 className={inputClass}
-                placeholder="Card/Tag ID Number"
+                placeholder="Card/Tag ID Number (required)"
                 value={signupCardId}
                 onChange={(e) => setSignupCardId(e.target.value)}
+                required
+                aria-required="true"
               />
             </Field>
             <p className="-mt-1 pl-1 text-[11px] leading-relaxed text-muted-foreground">
-              Enter Card/Tag ID given on your physical card. Leave blank to auto-generate one.
+              Enter the Card/Tag ID printed on your physical card. This field is required to register.
             </p>
           </>
         )}
@@ -243,10 +246,11 @@ export function AuthScreen({
 
       {scanOpen && (
         <PractitionerScan
+          store={store}
           onClose={() => setScanOpen(false)}
-          onApproved={(session) => {
+          onApproved={(session, patientCardId) => {
             setScanOpen(false)
-            onPractitioner(session)
+            onPractitioner(session, patientCardId)
           }}
         />
       )}

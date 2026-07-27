@@ -15,9 +15,12 @@ import {
   IdCard,
   Building2,
   User,
+  Tag,
+  Search,
+  UserCheck,
 } from "lucide-react"
 import { ModalShell } from "./shared"
-import { validateMedicalLicense } from "@/lib/store"
+import { validateMedicalLicense, type StoreApi } from "@/lib/store"
 
 export type PractitionerSession = {
   doctorName: string
@@ -32,19 +35,29 @@ export type PractitionerSession = {
  * parent can enter Approved Clinical Mode.
  */
 export function PractitionerScan({
+  store,
   onClose,
   onApproved,
 }: {
+  store: StoreApi
   onClose: () => void
-  onApproved: (session: PractitionerSession) => void
+  /** Hands back the verified session plus the Step-1 patient Card/Tag ID to unlock edits for. */
+  onApproved: (session: PractitionerSession, patientCardId: string) => void
 }) {
-  // "capture" = choose camera or upload, "review" = confirm/edit extracted fields.
-  const [step, setStep] = useState<"capture" | "review">("capture")
+  // Two-step workflow: "patient" = verify patient Card/Tag ID exists, then
+  // "capture" = choose camera or upload, "review" = confirm/edit extracted license fields.
+  const [step, setStep] = useState<"patient" | "capture" | "review">("patient")
   const [cameraOn, setCameraOn] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [fileName, setFileName] = useState("")
   const [error, setError] = useState<string | null>(null)
+
+  // Step 1 — patient Card/Tag ID lookup state.
+  const [patientCardId, setPatientCardId] = useState("")
+  const [patientName, setPatientName] = useState("")
+  const [resolvedCardId, setResolvedCardId] = useState("")
+  const [patientError, setPatientError] = useState<string | null>(null)
 
   const [doctorName, setDoctorName] = useState("")
   const [registrationNumber, setRegistrationNumber] = useState("")
@@ -93,6 +106,18 @@ export function PractitionerScan({
     }
   }
 
+  // Step 1: block unless the patient Card/Tag ID exists in usersDb or a dependent profile.
+  function verifyPatient() {
+    setPatientError(null)
+    const id = patientCardId.trim()
+    if (!id) return setPatientError("Enter the patient's Card/Tag ID.")
+    const match = store.findPatientByCardId(id)
+    if (!match) return setPatientError("\u26D4 Error: Patient Card/Tag ID not found.")
+    setPatientName(match.name)
+    setResolvedCardId(match.cardId)
+    setStep("capture")
+  }
+
   function runScan() {
     setScanning(true)
     setError(null)
@@ -114,11 +139,14 @@ export function PractitionerScan({
       setError(result.error ?? "Approval denied.")
       return
     }
-    onApproved({
-      doctorName: doctorName.trim(),
-      registrationNumber: registrationNumber.trim(),
-      institution: institution.trim(),
-    })
+    onApproved(
+      {
+        doctorName: doctorName.trim(),
+        registrationNumber: registrationNumber.trim(),
+        institution: institution.trim(),
+      },
+      resolvedCardId,
+    )
   }
 
   const inputClass =
@@ -127,7 +155,11 @@ export function PractitionerScan({
   return (
     <ModalShell
       title="Practitioner Verification"
-      subtitle="Scan or upload your medical license"
+      subtitle={
+        step === "patient"
+          ? "Step 1 of 2 \u00b7 Find the patient"
+          : "Step 2 of 2 \u00b7 Scan your medical license"
+      }
       headerAccent
       onClose={() => {
         stopCamera()
@@ -147,8 +179,68 @@ export function PractitionerScan({
         </div>
       )}
 
-      {step === "capture" ? (
+      {step === "patient" ? (
         <div className="space-y-4 p-5">
+          <div className="flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4 text-primary">
+            <Search className="h-6 w-6 shrink-0" />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Enter the patient&apos;s Card/Tag ID to locate their record. We check registered
+              accounts and linked dependent profiles before you verify your license in the next step.
+            </p>
+          </div>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold text-muted-foreground">
+              Patient Card/Tag ID
+            </span>
+            <div className="relative">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                <Tag className="h-4 w-4" />
+              </span>
+              <input
+                className={`${inputClass} uppercase tracking-wider`}
+                placeholder="e.g. LV-8H3N2"
+                value={patientCardId}
+                onChange={(e) => {
+                  setPatientCardId(e.target.value)
+                  setPatientError(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    verifyPatient()
+                  }
+                }}
+              />
+            </div>
+          </label>
+
+          {patientError && (
+            <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{patientError}</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={verifyPatient}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/25 transition hover:brightness-110"
+          >
+            <UserCheck className="h-5 w-5" />
+            Find Patient &amp; Continue
+          </button>
+        </div>
+      ) : step === "capture" ? (
+        <div className="space-y-4 p-5">
+          <div className="flex items-center gap-2 rounded-2xl border border-accent/20 bg-accent/5 p-3 text-accent">
+            <UserCheck className="h-5 w-5 shrink-0" />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Patient located:{" "}
+              <span className="font-semibold text-foreground">{patientName || "Verified patient"}</span>
+              {resolvedCardId ? ` \u00b7 ${resolvedCardId}` : ""}. Now verify your credentials.
+            </p>
+          </div>
           <div className="flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4 text-primary">
             <Stethoscope className="h-6 w-6 shrink-0" />
             <p className="text-xs leading-relaxed text-muted-foreground">

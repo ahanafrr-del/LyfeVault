@@ -181,6 +181,16 @@ export type StoreApi = {
   loginByCard: (cardId: string, password: string) => { ok: boolean; error?: string }
   /** Looks up a registered user by their physical Card/Tag ID (for emergency snapshots). */
   getUserByCardId: (cardId: string) => UserProfile | null
+  /** Read-only lookup of a registered account by email (no password / no session change). */
+  getUserByEmail: (email: string) => UserProfile | null
+  /**
+   * Practitioner Step 1 gate. Searches usersDb (by Card/Tag ID) AND every guardian's dependent
+   * profiles (by their linked account Card/Tag ID or paired MediTag) for an exact match. Returns
+   * the effective Card/Tag ID to target for clinical edits, or null when nothing matches.
+   */
+  findPatientByCardId: (
+    cardId: string,
+  ) => { kind: "user" | "dependent"; cardId: string; name: string } | null
   /** Attaches a clinical report to the record identified by a Card/Tag ID (no session change). */
   addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">) => { ok: boolean; error?: string }
   /** Verifies an email + password pair against the local users database (no session change). */
@@ -285,6 +295,39 @@ export function useStore(): StoreApi {
       (u) => (u.cardId ?? "").trim().toLowerCase() === key,
     )
     return match ? normalizeUser(match) : null
+  }, [])
+
+  const getUserByEmail: StoreApi["getUserByEmail"] = useCallback((email) => {
+    const key = email.trim().toLowerCase()
+    if (!key) return null
+    const existing = readDb()
+    const user = existing.users[key]
+    return user ? normalizeUser(user) : null
+  }, [])
+
+  const findPatientByCardId: StoreApi["findPatientByCardId"] = useCallback((cardId) => {
+    const key = cardId.trim().toLowerCase()
+    if (!key) return null
+    const existing = readDb()
+    // 1) Direct match against a registered account's physical Card/Tag ID.
+    const userMatch = Object.values(existing.users).find(
+      (u) => (u.cardId ?? "").trim().toLowerCase() === key,
+    )
+    if (userMatch) return { kind: "user", cardId: userMatch.cardId, name: userMatch.name }
+    // 2) Match against any guardian's dependents — by the dependent's linked account Card/Tag ID
+    //    or its paired MediTag. Resolve back to the linked account's Card/Tag ID so clinical
+    //    reports can be attached to the real record.
+    for (const u of Object.values(existing.users)) {
+      for (const d of u.dependents ?? []) {
+        const linked = existing.users[(d.assignedEmail ?? "").trim().toLowerCase()]
+        const linkedCard = (linked?.cardId ?? "").trim().toLowerCase()
+        const tag = (d.mediTagId ?? "").trim().toLowerCase()
+        if ((linkedCard && linkedCard === key) || (tag && tag === key)) {
+          return { kind: "dependent", cardId: linked?.cardId ?? d.mediTagId, name: d.name }
+        }
+      }
+    }
+    return null
   }, [])
 
   const addReportToCard: StoreApi["addReportToCard"] = useCallback(
@@ -416,6 +459,8 @@ export function useStore(): StoreApi {
     login,
     loginByCard,
     getUserByCardId,
+    getUserByEmail,
+    findPatientByCardId,
     addReportToCard,
     verifyCredentials,
     getDependentByEmail,
