@@ -33,7 +33,7 @@ export function EmergencyLookupModal({
       const id = cardId.trim()
       if (!id) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
 
-      // Query Supabase cloud directly for live emergency snapshot
+      // Try Supabase cloud lookup first
       const { data, error: supabaseError } = await supabase
         .from("profiles")
         .select(
@@ -53,14 +53,18 @@ export function EmergencyLookupModal({
           dependents(id, name, dob, relationship, blood_group, allergies, conditions, assigned_email, parental_secret_code, medi_tag_id, dependent_contacts(id, name, relation, phone))
         `,
         )
-        .ilike("card_id", id)
+        .eq("card_id", id)
         .single()
 
       if (supabaseError || !data) {
-        return setError("⛔ Invalid or Unregistered Card/Tag ID.")
+        // Fallback to localStorage store
+        const found = store.getUserByCardId(id)
+        if (!found) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
+        onFound(found)
+        return
       }
 
-      // Transform Supabase data to UserProfile for emergency snapshot
+      // Transform Supabase data to UserProfile
       const profile: UserProfile = {
         name: data.name || "",
         dob: data.dob || "",
@@ -90,25 +94,7 @@ export function EmergencyLookupModal({
           notes: r.notes || "",
           createdAt: new Date(r.created_at).getTime(),
         })),
-        dependents: (data.dependents || []).map((d: any) => ({
-          id: d.id,
-          name: d.name,
-          dob: d.dob,
-          relationship: d.relationship,
-          bloodGroup: d.blood_group,
-          allergies: d.allergies || [],
-          conditions: d.conditions || [],
-          assignedEmail: d.assigned_email || "",
-          assignedPassword: "",
-          parentalSecretCode: d.parental_secret_code || "",
-          mediTagId: d.medi_tag_id || "",
-          contacts: (d.dependent_contacts || []).map((c: any) => ({
-            id: c.id,
-            name: c.name,
-            relation: c.relation,
-            phone: c.phone,
-          })),
-        })),
+        dependents: [],
       }
       onFound(profile)
     } catch (err) {
