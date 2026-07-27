@@ -16,6 +16,7 @@ import {
   Pill,
 } from "lucide-react"
 import { ScreenHeader } from "./shared"
+import { LegalFooter } from "./legal"
 import { computeAge, isChildProfile, type StoreApi, type UserProfile } from "@/lib/store"
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
@@ -321,6 +322,9 @@ export function ProfileScreen({
           <LogOut className="h-5 w-5" />
           Terminate Active Session
         </button>
+
+        {/* App-wide copyright + legal links footer */}
+        <LegalFooter />
       </div>
     </div>
   )

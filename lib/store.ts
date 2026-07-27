@@ -195,6 +195,13 @@ export type StoreApi = {
   addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">) => { ok: boolean; error?: string }
   /** Verifies an email + password pair against the local users database (no session change). */
   verifyCredentials: (email: string, password: string) => { ok: boolean; error?: string }
+  /**
+   * Forgot-password Step 1 identity gate. Confirms an exact match on BOTH the registered
+   * Email ID and Card/Tag ID against the same account (no session change).
+   */
+  verifyResetIdentity: (email: string, cardId: string) => { ok: boolean; error?: string }
+  /** Forgot-password Step 2 commit. Updates the matched account's password (no session change). */
+  resetPassword: (email: string, newPassword: string) => { ok: boolean; error?: string }
   /** Finds a linked dependent record (across all guardians) by its assigned login email. */
   getDependentByEmail: (email: string) => DependentProfile | null
   logout: () => void
@@ -357,6 +364,32 @@ export function useStore(): StoreApi {
     return { ok: true }
   }, [])
 
+  const verifyResetIdentity: StoreApi["verifyResetIdentity"] = useCallback((email, cardId) => {
+    const emailKey = email.trim().toLowerCase()
+    const cardKey = cardId.trim().toLowerCase()
+    if (!emailKey || !cardKey) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
+    const existing = readDb()
+    const user = existing.users[emailKey]
+    if (!user || (user.cardId ?? "").trim().toLowerCase() !== cardKey) {
+      return { ok: false, error: "\u26D4 Invalid credentials: Email ID and Card/Tag ID do not match." }
+    }
+    return { ok: true }
+  }, [])
+
+  const resetPassword: StoreApi["resetPassword"] = useCallback(
+    (email, newPassword) => {
+      const emailKey = email.trim().toLowerCase()
+      if (!newPassword) return { ok: false, error: "Enter a new password." }
+      const existing = readDb()
+      const user = existing.users[emailKey]
+      if (!user) return { ok: false, error: "No account found for this email." }
+      const updated: UserProfile = { ...normalizeUser(user), password: newPassword }
+      persist({ ...existing, users: { ...existing.users, [emailKey]: updated } })
+      return { ok: true }
+    },
+    [persist],
+  )
+
   const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback((email) => {
     const key = email.trim().toLowerCase()
     if (!key) return null
@@ -463,6 +496,8 @@ export function useStore(): StoreApi {
     findPatientByCardId,
     addReportToCard,
     verifyCredentials,
+    verifyResetIdentity,
+    resetPassword,
     getDependentByEmail,
     logout,
     resetAll,

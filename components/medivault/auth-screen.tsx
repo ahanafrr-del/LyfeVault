@@ -5,6 +5,8 @@ import { AlertCircle, Ambulance, Lock, Mail, Calendar, User, Droplet, Tag, Steth
 import { Logo } from "./shared"
 import { PractitionerScan, type PractitionerSession } from "./practitioner-scan"
 import { EmergencyLookupModal } from "./emergency-lookup"
+import { ForgotPasswordModal } from "./forgot-password"
+import { LegalFooter, LegalLinks } from "./legal"
 import type { StoreApi, UserProfile } from "@/lib/store"
 
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
@@ -36,9 +38,12 @@ export function AuthScreen({
   const [gender, setGender] = useState("")
   const [bloodGroup, setBloodGroup] = useState("")
   const [signupCardId, setSignupCardId] = useState("")
+  /** Mandatory consent to Terms of Service + Privacy Policy required before registration. */
+  const [agreeTerms, setAgreeTerms] = useState(false)
 
   const [scanOpen, setScanOpen] = useState(false)
   const [lookupOpen, setLookupOpen] = useState(false)
+  const [forgotOpen, setForgotOpen] = useState(false)
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -55,6 +60,8 @@ export function AuthScreen({
     } else {
       if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
       if (!signupCardId.trim()) return setError("Card/Tag ID Number is required to register.")
+      if (!agreeTerms)
+        return setError("You must agree to the Terms of Service and Privacy Policy to register.")
       const res = store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
       if (!res.ok) return setError(res.error ?? "Sign up failed.")
       onAuthed("signup")
@@ -217,6 +224,40 @@ export function AuthScreen({
           />
         </Field>
 
+        {mode === "login" && (
+          <div className="-mt-1 flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setForgotOpen(true)
+                setError(null)
+              }}
+              className="text-xs font-semibold text-primary underline-offset-2 transition hover:underline"
+            >
+              Forgot Password?
+            </button>
+          </div>
+        )}
+
+        {mode === "signup" && (
+          <label className="mt-1 flex items-start gap-2.5 rounded-xl bg-card px-3 py-2.5 text-xs leading-relaxed text-muted-foreground shadow-sm">
+            <input
+              type="checkbox"
+              checked={agreeTerms}
+              onChange={(e) => {
+                setAgreeTerms(e.target.checked)
+                setError(null)
+              }}
+              required
+              aria-required="true"
+              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+            />
+            <span>
+              I agree to the <LegalLinks />.
+            </span>
+          </label>
+        )}
+
         {error && (
           <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <AlertCircle className="h-4 w-4 shrink-0" />
@@ -265,6 +306,10 @@ export function AuthScreen({
           }}
         />
       )}
+
+      {forgotOpen && <ForgotPasswordModal store={store} onClose={() => setForgotOpen(false)} />}
+
+      <LegalFooter className="mt-auto pt-6" />
     </div>
   )
 }
