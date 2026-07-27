@@ -2,7 +2,8 @@
 
 import { useState } from "react"
 import { Bell } from "lucide-react"
-import { useStore, isChildProfile, type UserProfile } from "@/lib/store"
+import { isChildProfile, type UserProfile } from "@/lib/store"
+import { useStoreSelector } from "@/lib/use-store"
 import { SplashScreen } from "@/components/medivault/splash-screen"
 import { AuthScreen } from "@/components/medivault/auth-screen"
 import { SegmentationScreen } from "@/components/medivault/segmentation-screen"
@@ -26,7 +27,7 @@ type Overlay = "chatbot" | "summary" | "upload" | null
 type SubScreen = "departments" | "dependents" | null
 
 export default function Page() {
-  const store = useStore()
+  const store = useStoreSelector()
   const [stage, setStage] = useState<Stage>("splash")
   const [tab, setTab] = useState<MainTab>("home")
   const [overlay, setOverlay] = useState<Overlay>(null)
