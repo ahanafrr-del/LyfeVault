@@ -8,7 +8,7 @@ import { EmergencyLookupModal } from "./emergency-lookup"
 import { ForgotPasswordModal } from "./forgot-password"
 import { LegalFooter, LegalLinks } from "./legal"
 import type { StoreApi, UserProfile } from "@/lib/store"
-import { supabase } from "@/lib/sopabase"
+import { supabase } from "@/lib/supabase"
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
 export function AuthScreen({
