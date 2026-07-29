@@ -98,7 +98,7 @@ export function AuthScreen({
       onAuthed("signup")
     }
   }
-  }
+  
 
   const inputClass =
     "w-full rounded-xl border border-border bg-input py-3 pl-11 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
