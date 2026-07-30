@@ -8,7 +8,7 @@ import { EmergencyLookupModal } from "./emergency-lookup"
 import { ForgotPasswordModal } from "./forgot-password"
 import { LegalFooter, LegalLinks } from "./legal"
 import type { StoreApi, UserProfile } from "@/lib/store"
-import { supabase } from "@/lib/supabase"
+
 const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
 export function AuthScreen({
@@ -44,61 +44,29 @@ export function AuthScreen({
   const [scanOpen, setScanOpen] = useState(false)
   const [lookupOpen, setLookupOpen] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
-  async function submit(e: React.FormEvent) {
+
+  function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-
     if (mode === "login") {
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
-      if (authError) return setError(authError.message)
-      const res = store.login(email, password)
-      if (!res.ok) return setError(res.error ?? "Login failed.")
+      if (loginMethod === "card") {
+        const res = store.loginByCard(cardId, password)
+        if (!res.ok) return setError(res.error ?? "Login failed.")
+      } else {
+        const res = store.login(email, password)
+        if (!res.ok) return setError(res.error ?? "Login failed.")
+      }
       onAuthed("login")
     } else {
       if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
       if (!signupCardId.trim()) return setError("Card/Tag ID Number is required to register.")
       if (!agreeTerms)
         return setError("You must agree to the Terms of Service and Privacy Policy to register.")
-
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: name,
-            dob,
-            blood_group: bloodGroup,
-            gender,
-            card_id: signupCardId,
-          },
-        },
-      })
-
-      if (authError) return setError(authError.message)
-
-      if (authData.user) {
-        const { error: profileError } = await supabase.from('profiles').insert([
-          {
-            id: authData.user.id,
-            name,
-            email,
-            dob,
-            blood_group: bloodGroup,
-            gender,
-            card_id: signupCardId,
-          }
-        ])
-        if (profileError) console.error("Profile creation error:", profileError.message)
-      }
-
-      store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
+      const res = store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
+      if (!res.ok) return setError(res.error ?? "Sign up failed.")
       onAuthed("signup")
     }
   }
-  
 
   const inputClass =
     "w-full rounded-xl border border-border bg-input py-3 pl-11 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
