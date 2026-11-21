@@ -271,7 +271,10 @@ export function useStore(): StoreApi {
     }
 
    try {
-      await httpsCallable(getFirebaseClient().functions, "createProfile")({ profile })
+  await setDoc(profileDoc(email), profile);
+} catch (error) {
+  ...
+}
       pendingRegistration.current = null
       setCurrentUser(normalizeUser(user))
       return { ok: true }
