@@ -270,18 +270,12 @@ export function useStore(): StoreApi {
       pendingRegistration.current = { ...pendingRegistration.current!, profile }
     }
 
-   try {
-  await setDoc(profileDoc(email), profile);
-} catch (error) {
-  pendingRegistration.current = null;
-  return {
-    ok: false,
-    error: errorMessage(
-      error,
-      "Your Firebase account was created, but Firestore could not save your profile."
-    ),
-  };
-}
+    try {
+      if (user.cardId) {
+        await httpsCallable(getFirebaseClient().functions, "createProfile")({ profile })
+      } else {
+        await setDoc(profileDoc(email), profile)
+      }
       pendingRegistration.current = null
       setCurrentUser(normalizeUser(user))
       return { ok: true }
