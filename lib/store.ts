@@ -13,7 +13,6 @@ import {
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
   signOut,
-  updateProfile as updateAuthProfile,
   type User as FirebaseUser,
 } from "firebase/auth"
 import { doc, getDoc, onSnapshot, setDoc } from "firebase/firestore"
@@ -127,10 +126,20 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
 
 function errorMessage(error: unknown, fallback: string): string {
   const code = (error as { code?: string })?.code ?? ""
+  const message = (error as { message?: string })?.message
   if (code.includes("email-already-in-use") || code.includes("already-exists")) return "An account with this email or Card/Tag ID already exists."
+  if (code.includes("invalid-email")) return "Enter a valid email address."
+  if (code.includes("weak-password")) return "Choose a password with at least 6 characters."
+  if (code.includes("operation-not-allowed")) return "Email and password sign-up is not enabled for this Firebase project."
+  if (code.includes("network-request-failed") || code.includes("unavailable") || code.includes("deadline-exceeded")) {
+    return "Firebase could not be reached. Check your connection and try again."
+  }
+  if (code.includes("functions/not-found")) return "The profile service is not deployed for this Firebase project. Contact the app administrator."
   if (code.includes("user-not-found")) return "No account found for this email."
   if (code.includes("wrong-password") || code.includes("invalid-credential") || code.includes("unauthenticated")) return "Incorrect password."
   if (code.includes("permission-denied")) return "This action is not permitted for this account."
+  if (code.includes("too-many-requests") || code.includes("resource-exhausted")) return "Too many attempts. Wait a little and try again."
+  if (typeof message === "string" && message.trim()) return message
   return fallback
 }
 
@@ -151,7 +160,7 @@ export type StoreApi = {
   ready: boolean
   currentUser: UserProfile | null
   emergencyProfile: UserProfile | null
-  register: (data: Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">) => Promise<Result>
+  register: (data: Omit<Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">, "cardId"> & { cardId?: string }) => Promise<Result>
   login: (email: string, password: string) => Promise<Result>
   /** Quick Card login: authenticates using the physical Card/Tag ID + password. */
   loginByCard: (cardId: string, password: string) => Promise<Result>
@@ -230,20 +239,23 @@ export function useStore(): StoreApi {
   const register: StoreApi["register"] = useCallback(async (data) => {
     const email = data.email.trim().toLowerCase()
     if (!email || !data.password) return { ok: false, error: "Email and password are required." }
-    if (!data.cardId.trim()) return { ok: false, error: "Card/Tag ID Number is required to register." }
     let createdUser: FirebaseUser | null = null
     try {
-      const { auth, functions } = getFirebaseClient()
+      const { auth } = getFirebaseClient()
       const credential = await createUserWithEmailAndPassword(auth, email, data.password)
       createdUser = credential.user
-      await updateAuthProfile(credential.user, { displayName: data.name.trim() })
       const user: UserProfile = {
         name: data.name.trim(), dob: data.dob, bloodGroup: data.bloodGroup, gender: data.gender,
-        email, password: "", cardId: data.cardId.trim(), allergies: [], conditions: [], medications: [],
+        email, password: "", cardId: data.cardId?.trim() ?? "", allergies: [], conditions: [], medications: [],
         contacts: [], reports: [], dependents: [],
       }
-      await httpsCallable(functions, "createProfile")({ profile: sanitizeProfile(user) })
-      window.localStorage.setItem(SESSION_KEY, email)
+      const profile = sanitizeProfile(user)
+      if (user.cardId) {
+        await httpsCallable(getFirebaseClient().functions, "createProfile")({ profile })
+      } else {
+        await setDoc(profileDoc(email), profile)
+      }
+      setCurrentUser(normalizeUser(user))
       return { ok: true }
     } catch (error) {
       if (createdUser) await deleteUser(createdUser).catch(() => {})

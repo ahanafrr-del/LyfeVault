@@ -57,28 +57,40 @@ exports.createProfile = onCall(async (request) => {
   if (!request.auth?.token?.email) throw new HttpsError("unauthenticated", "Sign in to create a profile.")
   const email = normalizedEmail(request.auth.token.email)
   const profile = request.data?.profile
-  if (!profile || normalizedEmail(profile.email) !== email || !profile.cardId?.trim()) {
-    throw new HttpsError("invalid-argument", "A profile email and Card/Tag ID are required.")
+  if (!profile || normalizedEmail(profile.email) !== email) {
+    throw new HttpsError("invalid-argument", "A profile email is required and must match the signed-in account.")
   }
-  const cardIdNormalized = normalizedCardId(profile.cardId)
+
+  const cardId = typeof profile.cardId === "string" ? profile.cardId.trim() : ""
+  const cardIdNormalized = normalizedCardId(cardId)
   const userRef = users.doc(email)
-  const claimRef = db.collection("cardIdClaims").doc(cardIdNormalized)
+  const claimRef = cardIdNormalized ? db.collection("cardIdClaims").doc(cardIdNormalized) : null
 
   await db.runTransaction(async (transaction) => {
-    const [userSnapshot, claimSnapshot] = await Promise.all([
-      transaction.get(userRef),
-      transaction.get(claimRef),
-    ])
-    if (userSnapshot.exists) throw new HttpsError("already-exists", "An account with this email already exists.")
-    if (claimSnapshot.exists) throw new HttpsError("already-exists", "This Card/Tag ID is already registered.")
+    const userSnapshot = await transaction.get(userRef)
+    const claimSnapshot = claimRef ? await transaction.get(claimRef) : null
+
+    if (claimSnapshot?.exists && claimSnapshot.data()?.email !== email) {
+      throw new HttpsError("already-exists", "This Card/Tag ID is already registered.")
+    }
+
+    if (userSnapshot.exists) {
+      const existingCardId = normalizedCardId(userSnapshot.data()?.cardIdNormalized ?? userSnapshot.data()?.cardId)
+      if (cardIdNormalized && cardIdNormalized !== existingCardId) {
+        throw new HttpsError("already-exists", "This email already has a different Card/Tag ID registered.")
+      }
+      if (claimRef && !claimSnapshot?.exists) transaction.create(claimRef, { email })
+      return
+    }
+
     const { password, ...profileWithoutPassword } = profile
-    const storedProfile = { ...profileWithoutPassword, email, cardIdNormalized }
+    const storedProfile = { ...profileWithoutPassword, email, cardId, cardIdNormalized }
     storedProfile.dependents = (storedProfile.dependents ?? []).map(({ assignedPassword, ...dependent }) => ({
       ...dependent,
       assignedPassword: "",
     }))
     transaction.create(userRef, storedProfile)
-    transaction.create(claimRef, { email })
+    if (claimRef) transaction.create(claimRef, { email })
   })
 
   return { ok: true }

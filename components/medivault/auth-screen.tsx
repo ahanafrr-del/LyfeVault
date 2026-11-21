@@ -29,6 +29,7 @@ export function AuthScreen({
   /** Login can authenticate by email+password or by physical Card/Tag ID + password. */
   const [loginMethod, setLoginMethod] = useState<"email" | "card">("email")
   const [error, setError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -47,21 +48,29 @@ export function AuthScreen({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    if (isSubmitting) return
     setError(null)
-    if (mode === "login") {
-      const res = loginMethod === "card"
-        ? await store.loginByCard(cardId, password)
-        : await store.login(email, password)
-      if (!res.ok) return setError(res.error ?? "Login failed.")
-      onAuthed("login")
-    } else {
-      if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
-      if (!signupCardId.trim()) return setError("Card/Tag ID Number is required to register.")
-      if (!agreeTerms)
-        return setError("You must agree to the Terms of Service and Privacy Policy to register.")
-      const res = await store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
-      if (!res.ok) return setError(res.error ?? "Sign up failed.")
-      onAuthed("signup")
+    setIsSubmitting(true)
+    try {
+      if (mode === "login") {
+        const res = loginMethod === "card"
+          ? await store.loginByCard(cardId, password)
+          : await store.login(email, password)
+        if (!res.ok) return setError(res.error ?? "Login failed.")
+        onAuthed("login")
+      } else {
+        if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
+        if (!agreeTerms)
+          return setError("You must agree to the Terms of Service and Privacy Policy to register.")
+        const res = await store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
+        if (!res.ok) return setError(res.error ?? "Sign up failed.")
+        onAuthed("signup")
+      }
+    } catch (submitError) {
+      const message = submitError instanceof Error ? submitError.message : null
+      setError(message || (mode === "signup" ? "Account creation could not be completed. Try again." : "Login could not be completed. Try again."))
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -155,15 +164,13 @@ export function AuthScreen({
             <Field icon={<Tag className="h-4 w-4" />}>
               <input
                 className={inputClass}
-                placeholder="Card/Tag ID Number (required)"
+                placeholder="Card/Tag ID Number (optional)"
                 value={signupCardId}
                 onChange={(e) => setSignupCardId(e.target.value)}
-                required
-                aria-required="true"
               />
             </Field>
             <p className="-mt-1 pl-1 text-[11px] leading-relaxed text-muted-foreground">
-              Enter the Card/Tag ID printed on your physical card. This field is required to register.
+              Card/Tag ID is optional. Card-based login and emergency lookup require a registered ID.
             </p>
           </>
         )}
@@ -205,6 +212,7 @@ export function AuthScreen({
               type="email"
               className={inputClass}
               placeholder="Email ID"
+              required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
@@ -216,6 +224,8 @@ export function AuthScreen({
             type="password"
             className={inputClass}
             placeholder="Password"
+            required
+            minLength={mode === "signup" ? 6 : undefined}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
@@ -264,9 +274,11 @@ export function AuthScreen({
 
         <button
           type="submit"
-          className="mt-1 rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition hover:brightness-110"
+          disabled={isSubmitting}
+          aria-busy={isSubmitting}
+          className="mt-1 rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/25 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {mode === "login" ? "Sign in" : "Create account"}
+          {isSubmitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
         </button>
       </form>
 
