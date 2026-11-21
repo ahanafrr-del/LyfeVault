@@ -85,20 +85,20 @@ export function DependentsDirectory({
   }
 
   // Shared validation for both add and edit: name + verified child login + strong code.
-  function validateForm(): { ok: boolean; error?: string } {
+  async function validateForm(): Promise<{ ok: boolean; error?: string }> {
     if (!form.name.trim()) return { ok: false, error: "Enter the child's full name." }
-    const cred = store.verifyCredentials(form.assignedEmail, form.assignedPassword)
+    const cred = await store.verifyCredentials(form.assignedEmail, form.assignedPassword)
     if (!cred.ok) return { ok: false, error: cred.error ?? "Could not verify the child's account." }
     const code = validateParentalCode(form.parentalSecretCode)
     if (!code.ok) return { ok: false, error: code.error }
     return { ok: true }
   }
 
-  function handleAdd() {
+  async function handleAdd() {
     setError(null)
-    const res = validateForm()
+    const res = await validateForm()
     if (!res.ok) return setError(res.error ?? "Please review the form.")
-    store.addDependent({
+    await store.addDependent({
       name: form.name.trim(),
       dob: "",
       relationship: "Child",
@@ -113,12 +113,12 @@ export function DependentsDirectory({
     closeModal()
   }
 
-  function handleUpdate() {
+  async function handleUpdate() {
     if (!editing) return
     setError(null)
-    const res = validateForm()
+    const res = await validateForm()
     if (!res.ok) return setError(res.error ?? "Please review the form.")
-    store.updateDependent(editing.id, {
+    await store.updateDependent(editing.id, {
       name: form.name.trim(),
       assignedEmail: form.assignedEmail.trim().toLowerCase(),
       assignedPassword: form.assignedPassword,
@@ -127,8 +127,8 @@ export function DependentsDirectory({
     closeModal()
   }
 
-  function handleDelete() {
-    if (editing) store.removeDependent(editing.id)
+  async function handleDelete() {
+    if (editing) await store.removeDependent(editing.id)
     closeModal()
   }
 

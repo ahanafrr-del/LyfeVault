@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Bell } from "lucide-react"
 import { useStore, isChildProfile, type UserProfile } from "@/lib/store"
 import { SplashScreen } from "@/components/medivault/splash-screen"
@@ -41,6 +41,10 @@ export default function Page() {
 
   const user = store.currentUser
   const minor = isChildProfile(user)
+
+  useEffect(() => {
+    if (store.ready && user && stage === "splash") setStage("app")
+  }, [store.ready, user, stage])
 
   function handleReset() {
     store.resetAll()

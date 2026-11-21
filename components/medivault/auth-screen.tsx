@@ -45,24 +45,21 @@ export function AuthScreen({
   const [lookupOpen, setLookupOpen] = useState(false)
   const [forgotOpen, setForgotOpen] = useState(false)
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     if (mode === "login") {
-      if (loginMethod === "card") {
-        const res = store.loginByCard(cardId, password)
-        if (!res.ok) return setError(res.error ?? "Login failed.")
-      } else {
-        const res = store.login(email, password)
-        if (!res.ok) return setError(res.error ?? "Login failed.")
-      }
+      const res = loginMethod === "card"
+        ? await store.loginByCard(cardId, password)
+        : await store.login(email, password)
+      if (!res.ok) return setError(res.error ?? "Login failed.")
       onAuthed("login")
     } else {
       if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
       if (!signupCardId.trim()) return setError("Card/Tag ID Number is required to register.")
       if (!agreeTerms)
         return setError("You must agree to the Terms of Service and Privacy Policy to register.")
-      const res = store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
+      const res = await store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
       if (!res.ok) return setError(res.error ?? "Sign up failed.")
       onAuthed("signup")
     }

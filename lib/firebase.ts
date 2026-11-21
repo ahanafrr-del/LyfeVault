@@ -1,14 +1,35 @@
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { getApp, getApps, initializeApp, type FirebaseOptions } from "firebase/app"
+import { getAuth } from "firebase/auth"
+import { getFirestore } from "firebase/firestore"
+import { getFunctions } from "firebase/functions"
 
-const firebaseConfig = {
-  apiKey: "AIzaSyAeeK9k3rTg21JOhX57GpPZjte_k0iO7XQ",
-  authDomain: "lyfevault-f51d5.firebaseapp.com",
-  projectId: "lyfevault-f51d5",
-  storageBucket: "lyfevault-f51d5.firebasestorage.app",
-  messagingSenderId: "933598045704",
-  appId: "1:933598045704:web:e037d5787438dcf96113bd"
-};
+let client: ReturnType<typeof createFirebaseClient> | undefined
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+function createFirebaseClient() {
+  if (typeof window === "undefined") {
+    throw new Error("Firebase client services are only available in the browser.")
+  }
+
+  const config: FirebaseOptions = {
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  }
+
+  if (!config.apiKey || !config.authDomain || !config.projectId || !config.appId) {
+    throw new Error("Firebase is not configured. Add the Firebase Web App environment variables.")
+  }
+
+  const app = getApps().length ? getApp() : initializeApp(config)
+  return {
+    app,
+    auth: getAuth(app),
+    db: getFirestore(app),
+    functions: getFunctions(app, "us-central1"),
+  }
+}
+
+export function getFirebaseClient() {
+  return (client ??= createFirebaseClient())
+}

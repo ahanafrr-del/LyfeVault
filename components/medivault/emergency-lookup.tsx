@@ -23,12 +23,12 @@ export function EmergencyLookupModal({
   const [cardId, setCardId] = useState("")
   const [error, setError] = useState<string | null>(null)
 
-  function lookup() {
+  async function lookup() {
     setError(null)
     const id = cardId.trim()
-    if (!id) return setError("\u26D4 Invalid or Unregistered Card/Tag ID.")
-    const found = store.getUserByCardId(id)
-    if (!found) return setError("\u26D4 Invalid or Unregistered Card/Tag ID.")
+    if (!id) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
+    const found = await store.getUserByCardId(id)
+    if (!found) return setError("⛔ Invalid or Unregistered Card/Tag ID.")
     onFound(found)
   }
 
