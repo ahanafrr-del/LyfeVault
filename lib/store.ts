@@ -1,11 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { deleteApp, initializeApp } from "firebase/app"
 import {
   browserLocalPersistence,
   createUserWithEmailAndPassword,
-  deleteUser,
   inMemoryPersistence,
   onAuthStateChanged,
   setPersistence,
@@ -125,21 +124,29 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  const code = (error as { code?: string })?.code ?? ""
-  const message = (error as { message?: string })?.message
+  const details = error as { code?: string; message?: string; status?: number; statusCode?: number }
+  const code = details?.code?.toLowerCase() ?? ""
+  const message = details?.message?.toLowerCase() ?? ""
+  const status = details?.status ?? details?.statusCode
   if (code.includes("email-already-in-use") || code.includes("already-exists")) return "An account with this email or Card/Tag ID already exists."
   if (code.includes("invalid-email")) return "Enter a valid email address."
   if (code.includes("weak-password")) return "Choose a password with at least 6 characters."
   if (code.includes("operation-not-allowed")) return "Email and password sign-up is not enabled for this Firebase project."
+  if (status === 0 || /status(?: code)?[: ]+0\b/.test(message)) {
+    return "Firebase returned a network status of 0. Check your connection, browser extensions, and Firebase API key restrictions, then try again."
+  }
+  if (code.includes("auth/internal-error") || code === "internal" || code.endsWith("/internal")) {
+    return "Firebase returned an internal error. Check that Email/Password sign-in is enabled in Firebase Authentication and try again."
+  }
   if (code.includes("network-request-failed") || code.includes("unavailable") || code.includes("deadline-exceeded")) {
     return "Firebase could not be reached. Check your connection and try again."
   }
+  if (code.includes("invalid-api-key")) return "Firebase rejected this app's API key. Check the Firebase Web App configuration."
   if (code.includes("functions/not-found")) return "The profile service is not deployed for this Firebase project. Contact the app administrator."
   if (code.includes("user-not-found")) return "No account found for this email."
   if (code.includes("wrong-password") || code.includes("invalid-credential") || code.includes("unauthenticated")) return "Incorrect password."
   if (code.includes("permission-denied")) return "This action is not permitted for this account."
   if (code.includes("too-many-requests") || code.includes("resource-exhausted")) return "Too many attempts. Wait a little and try again."
-  if (typeof message === "string" && message.trim()) return message
   return fallback
 }
 
@@ -187,6 +194,7 @@ export type StoreApi = {
 export function useStore(): StoreApi {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
   const [ready, setReady] = useState(false)
+  const pendingRegistration = useRef<{ uid: string; email: string; profile: CloudProfile } | null>(null)
   useEffect(() => {
     let alive = true
     let unsubscribeAuth = () => {}
@@ -239,27 +247,43 @@ export function useStore(): StoreApi {
   const register: StoreApi["register"] = useCallback(async (data) => {
     const email = data.email.trim().toLowerCase()
     if (!email || !data.password) return { ok: false, error: "Email and password are required." }
-    let createdUser: FirebaseUser | null = null
-    try {
-      const { auth } = getFirebaseClient()
-      const credential = await createUserWithEmailAndPassword(auth, email, data.password)
-      createdUser = credential.user
-      const user: UserProfile = {
-        name: data.name.trim(), dob: data.dob, bloodGroup: data.bloodGroup, gender: data.gender,
-        email, password: "", cardId: data.cardId?.trim() ?? "", allergies: [], conditions: [], medications: [],
-        contacts: [], reports: [], dependents: [],
+
+    const user: UserProfile = {
+      name: data.name.trim(), dob: data.dob, bloodGroup: data.bloodGroup, gender: data.gender,
+      email, password: "", cardId: data.cardId?.trim() ?? "", allergies: [], conditions: [], medications: [],
+      contacts: [], reports: [], dependents: [],
+    }
+    const profile = sanitizeProfile(user)
+    const { auth } = getFirebaseClient()
+    let firebaseUser = auth.currentUser
+    const canRetryProfile = pendingRegistration.current?.email === email && pendingRegistration.current.uid === firebaseUser?.uid
+
+    if (!canRetryProfile) {
+      pendingRegistration.current = null
+      try {
+        firebaseUser = (await createUserWithEmailAndPassword(auth, email, data.password)).user
+      } catch (error) {
+        return { ok: false, error: errorMessage(error, "Firebase Authentication could not create your account. Try again.") }
       }
-      const profile = sanitizeProfile(user)
+      pendingRegistration.current = { uid: firebaseUser.uid, email, profile }
+    } else {
+      pendingRegistration.current = { ...pendingRegistration.current!, profile }
+    }
+
+    try {
       if (user.cardId) {
         await httpsCallable(getFirebaseClient().functions, "createProfile")({ profile })
       } else {
         await setDoc(profileDoc(email), profile)
       }
+      pendingRegistration.current = null
       setCurrentUser(normalizeUser(user))
       return { ok: true }
     } catch (error) {
-      if (createdUser) await deleteUser(createdUser).catch(() => {})
-      return { ok: false, error: errorMessage(error, "Sign up failed. Check the Firebase connection and try again.") }
+      return {
+        ok: false,
+        error: `Your Firebase account was created, but Firestore could not save your profile. Your account has not been deleted. Retry sign-up to finish saving it. ${errorMessage(error, "Check the Firestore connection, rules, and profile service deployment.")}`,
+      }
     }
   }, [])
 
