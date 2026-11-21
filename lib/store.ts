@@ -1,6 +1,24 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { deleteApp, initializeApp } from "firebase/app"
+import {
+  browserLocalPersistence,
+  createUserWithEmailAndPassword,
+  deleteUser,
+  inMemoryPersistence,
+  onAuthStateChanged,
+  setPersistence,
+  signInWithCustomToken,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signOut,
+  updateProfile as updateAuthProfile,
+  type User as FirebaseUser,
+} from "firebase/auth"
+import { doc, getDoc, onSnapshot, setDoc } from "firebase/firestore"
+import { httpsCallable } from "firebase/functions"
+import { getFirebaseClient } from "@/lib/firebase"
 
 export type EmergencyContact = {
   id: string
@@ -58,30 +76,342 @@ export type UserProfile = {
   dependents: DependentProfile[]
 }
 
-type Database = {
-  users: Record<string, UserProfile>
-  session: string | null
+type CloudProfile = Omit<UserProfile, "password"> & { cardIdNormalized?: string }
+type PatientMatch = { kind: "user" | "dependent"; cardId: string; name: string }
+type Result = { ok: boolean; error?: string }
+
+const SESSION_KEY = "medivault_session_v1"
+
+function profileDoc(email: string) {
+  return doc(getFirebaseClient().db, "users", email.trim().toLowerCase())
 }
 
-const KEY = "medivault_db_v1"
+function sanitizeProfile(profile: Partial<UserProfile> & { email: string }): CloudProfile {
+  const { password: _password, ...safeProfile } = profile
+  return {
+    ...safeProfile,
+    email: profile.email.trim().toLowerCase(),
+    cardId: profile.cardId ?? "",
+    cardIdNormalized: (profile.cardId ?? "").trim().toLowerCase(),
+    allergies: profile.allergies ?? [],
+    conditions: profile.conditions ?? [],
+    medications: profile.medications ?? [],
+    contacts: profile.contacts ?? [],
+    reports: profile.reports ?? [],
+    dependents: (profile.dependents ?? []).map(({ assignedPassword: _assignedPassword, ...dependent }) => ({
+      ...dependent,
+      assignedPassword: "",
+      parentalSecretCode: dependent.parentalSecretCode ?? "",
+    })),
+  } as CloudProfile
+}
 
-const EMPTY_DB: Database = { users: {}, session: null }
-
-function readDb(): Database {
-  if (typeof window === "undefined") return EMPTY_DB
-  try {
-    const raw = window.localStorage.getItem(KEY)
-    if (!raw) return EMPTY_DB
-    const parsed = JSON.parse(raw) as Database
-    return { users: parsed.users ?? {}, session: parsed.session ?? null }
-  } catch {
-    return EMPTY_DB
+function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProfile {
+  const safe = sanitizeProfile(user)
+  return {
+    name: safe.name ?? "",
+    dob: safe.dob ?? "",
+    bloodGroup: safe.bloodGroup ?? "",
+    gender: safe.gender ?? "",
+    email: safe.email,
+    password: "",
+    cardId: safe.cardId ?? "",
+    allergies: safe.allergies ?? [],
+    conditions: safe.conditions ?? [],
+    medications: safe.medications ?? [],
+    contacts: safe.contacts ?? [],
+    reports: safe.reports ?? [],
+    dependents: safe.dependents ?? [],
   }
 }
 
-function writeDb(db: Database) {
-  if (typeof window === "undefined") return
-  window.localStorage.setItem(KEY, JSON.stringify(db))
+function errorMessage(error: unknown, fallback: string): string {
+  const code = (error as { code?: string })?.code ?? ""
+  if (code.includes("email-already-in-use") || code.includes("already-exists")) return "An account with this email or Card/Tag ID already exists."
+  if (code.includes("user-not-found")) return "No account found for this email."
+  if (code.includes("wrong-password") || code.includes("invalid-credential") || code.includes("unauthenticated")) return "Incorrect password."
+  if (code.includes("permission-denied")) return "This action is not permitted for this account."
+  return fallback
+}
+
+async function mutateSignedInProfile(
+  update: (profile: UserProfile) => UserProfile,
+): Promise<void> {
+  const { auth, db } = getFirebaseClient()
+  const email = auth.currentUser?.email?.trim().toLowerCase()
+  if (!email) return
+  const reference = profileDoc(email)
+  const snapshot = await getDoc(reference)
+  if (!snapshot.exists()) throw new Error("Your cloud profile could not be found.")
+  const current = normalizeUser(snapshot.data() as Partial<UserProfile> & { email: string })
+  await setDoc(reference, sanitizeProfile(update(current)), { merge: true })
+}
+
+export type StoreApi = {
+  ready: boolean
+  currentUser: UserProfile | null
+  emergencyProfile: UserProfile | null
+  register: (data: Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">) => Promise<Result>
+  login: (email: string, password: string) => Promise<Result>
+  /** Quick Card login: authenticates using the physical Card/Tag ID + password. */
+  loginByCard: (cardId: string, password: string) => Promise<Result>
+  /** Looks up a registered user by their physical Card/Tag ID (for emergency snapshots). */
+  getUserByCardId: (cardId: string) => Promise<UserProfile | null>
+  /** Read-only lookup of a registered account by email (no password / no session change). */
+  getUserByEmail: (email: string) => Promise<UserProfile | null>
+  /** Searches registered profiles and linked dependents for an exact Card/Tag ID. */
+  findPatientByCardId: (cardId: string) => Promise<PatientMatch | null>
+  /** Attaches a clinical report to the record identified by a Card/Tag ID. */
+  addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">, practitioner?: { doctorName: string; registrationNumber: string; institution: string }) => Promise<Result>
+  verifyCredentials: (email: string, password: string) => Promise<Result>
+  verifyResetIdentity: (email: string, cardId: string) => Promise<Result>
+  getDependentByEmail: (email: string) => Promise<DependentProfile | null>
+  logout: () => Promise<void>
+  resetAll: () => void
+  addReport: (report: Omit<MedicalReport, "id" | "createdAt">) => Promise<void>
+  updateProfile: (partial: Partial<UserProfile>) => Promise<void>
+  addDependent: (data: Omit<DependentProfile, "id" | "mediTagId">) => Promise<void>
+  updateDependent: (id: string, partial: Partial<Omit<DependentProfile, "id">>) => Promise<void>
+  removeDependent: (id: string) => Promise<void>
+}
+
+export function useStore(): StoreApi {
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    let alive = true
+    let unsubscribeAuth = () => {}
+    let unsubscribeProfile = () => {}
+    let auth
+    try {
+      auth = getFirebaseClient().auth
+    } catch {
+      setReady(true)
+      return () => { alive = false }
+    }
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        if (!alive) return
+        unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser: FirebaseUser | null) => {
+          unsubscribeProfile()
+          unsubscribeProfile = () => {}
+          if (!firebaseUser?.email) {
+            window.localStorage.removeItem(SESSION_KEY)
+            setCurrentUser(null)
+            setReady(true)
+            return
+          }
+          const email = firebaseUser.email.trim().toLowerCase()
+          window.localStorage.setItem(SESSION_KEY, email)
+          unsubscribeProfile = onSnapshot(
+            profileDoc(email),
+            (snapshot) => {
+              setCurrentUser(snapshot.exists() ? normalizeUser(snapshot.data() as Partial<UserProfile> & { email: string }) : null)
+              setReady(true)
+            },
+            () => {
+              setCurrentUser(null)
+              setReady(true)
+            },
+          )
+        })
+      })
+      .catch(() => {
+        setCurrentUser(null)
+        setReady(true)
+      })
+    return () => {
+      alive = false
+      unsubscribeAuth()
+      unsubscribeProfile()
+    }
+  }, [])
+
+  const register: StoreApi["register"] = useCallback(async (data) => {
+    const email = data.email.trim().toLowerCase()
+    if (!email || !data.password) return { ok: false, error: "Email and password are required." }
+    if (!data.cardId.trim()) return { ok: false, error: "Card/Tag ID Number is required to register." }
+    let createdUser: FirebaseUser | null = null
+    try {
+      const { auth, functions } = getFirebaseClient()
+      const credential = await createUserWithEmailAndPassword(auth, email, data.password)
+      createdUser = credential.user
+      await updateAuthProfile(credential.user, { displayName: data.name.trim() })
+      const user: UserProfile = {
+        name: data.name.trim(), dob: data.dob, bloodGroup: data.bloodGroup, gender: data.gender,
+        email, password: "", cardId: data.cardId.trim(), allergies: [], conditions: [], medications: [],
+        contacts: [], reports: [], dependents: [],
+      }
+      await httpsCallable(functions, "createProfile")({ profile: sanitizeProfile(user) })
+      window.localStorage.setItem(SESSION_KEY, email)
+      return { ok: true }
+    } catch (error) {
+      if (createdUser) await deleteUser(createdUser).catch(() => {})
+      return { ok: false, error: errorMessage(error, "Sign up failed. Check the Firebase connection and try again.") }
+    }
+  }, [])
+
+  const login: StoreApi["login"] = useCallback(async (email, password) => {
+    const key = email.trim().toLowerCase()
+    if (!key || !password) return { ok: false, error: "Email and password are required." }
+    try {
+      const { auth } = getFirebaseClient()
+      await signInWithEmailAndPassword(auth, key, password)
+      window.localStorage.setItem(SESSION_KEY, key)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error, "Login failed. Check the Firebase connection and try again.") }
+    }
+  }, [])
+
+  const loginByCard: StoreApi["loginByCard"] = useCallback(async (cardId, password) => {
+    const id = cardId.trim()
+    if (!id) return { ok: false, error: "Enter your Card/Tag ID." }
+    try {
+      const { auth, functions, app } = getFirebaseClient()
+      const result = await httpsCallable<{ cardId: string; password: string; apiKey?: string }, { token: string }>(functions, "loginByCard")({
+        cardId: id, password, apiKey: app.options.apiKey,
+      })
+      await signInWithCustomToken(auth, result.data.token)
+      const email = auth.currentUser?.email?.trim().toLowerCase()
+      if (email) window.localStorage.setItem(SESSION_KEY, email)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error, "Card login failed. Check the Firebase connection and try again.") }
+    }
+  }, [])
+
+  const getUserByCardId: StoreApi["getUserByCardId"] = useCallback(async (cardId) => {
+    if (!cardId.trim()) return null
+    try {
+      const { functions } = getFirebaseClient()
+      const result = await httpsCallable<{ cardId: string }, UserProfile>(functions, "lookupByCardId")({ cardId: cardId.trim() })
+      return normalizeUser(result.data)
+    } catch {
+      return null
+    }
+  }, [])
+
+  const getUserByEmail: StoreApi["getUserByEmail"] = useCallback(async (email) => {
+    if (!email.trim()) return null
+    try {
+      const { functions } = getFirebaseClient()
+      const result = await httpsCallable<{ email: string }, UserProfile | null>(functions, "getUserByEmail")({ email: email.trim() })
+      return result.data ? normalizeUser(result.data) : null
+    } catch {
+      return null
+    }
+  }, [])
+
+  const findPatientByCardId: StoreApi["findPatientByCardId"] = useCallback(async (cardId) => {
+    if (!cardId.trim()) return null
+    try {
+      const { functions } = getFirebaseClient()
+      const result = await httpsCallable<{ cardId: string }, PatientMatch | null>(functions, "findPatientByCardId")({ cardId: cardId.trim() })
+      return result.data
+    } catch {
+      return null
+    }
+  }, [])
+
+  const addReportToCard: StoreApi["addReportToCard"] = useCallback(async (cardId, report, practitioner) => {
+    if (!practitioner) return { ok: false, error: "Practitioner identity is required." }
+    try {
+      const { functions } = getFirebaseClient()
+      await httpsCallable(functions, "addReportToCard")({ cardId, report, practitioner })
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error, "Could not attach the report.") }
+    }
+  }, [])
+
+  const verifyCredentials: StoreApi["verifyCredentials"] = useCallback(async (email, password) => {
+    const key = email.trim().toLowerCase()
+    if (!key || !password) return { ok: false, error: "Enter the child's email and password." }
+    let secondaryApp
+    try {
+      const { app } = getFirebaseClient()
+      secondaryApp = initializeApp(app.options, `credential-check-${Date.now()}`)
+      const secondaryAuth = (await import("firebase/auth")).getAuth(secondaryApp)
+      await setPersistence(secondaryAuth, inMemoryPersistence)
+      await signInWithEmailAndPassword(secondaryAuth, key, password)
+      await signOut(secondaryAuth)
+      await deleteApp(secondaryApp)
+      return { ok: true }
+    } catch (error) {
+      if (secondaryApp) await deleteApp(secondaryApp).catch(() => {})
+      return { ok: false, error: errorMessage(error, "Could not verify the child's account.") }
+    }
+  }, [])
+
+  const verifyResetIdentity: StoreApi["verifyResetIdentity"] = useCallback(async (email, cardId) => {
+    if (!email.trim() || !cardId.trim()) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
+    try {
+      const { auth, functions } = getFirebaseClient()
+      await httpsCallable(functions, "verifyResetIdentity")({ email, cardId })
+      await sendPasswordResetEmail(auth, email.trim().toLowerCase())
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: errorMessage(error, "Email ID and Card/Tag ID do not match.") }
+    }
+  }, [])
+
+  const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback(async (email) => {
+    try {
+      const { functions } = getFirebaseClient()
+      const result = await httpsCallable<{ email: string }, DependentProfile | null>(functions, "getDependentByEmail")({ email })
+      return result.data
+    } catch {
+      return null
+    }
+  }, [])
+
+  const logout: StoreApi["logout"] = useCallback(async () => {
+    window.localStorage.removeItem(SESSION_KEY)
+    await signOut(getFirebaseClient().auth)
+  }, [])
+
+  const resetAll: StoreApi["resetAll"] = useCallback(() => {
+    window.localStorage.removeItem(SESSION_KEY)
+    setCurrentUser(null)
+    void signOut(getFirebaseClient().auth)
+  }, [])
+
+  const addReport: StoreApi["addReport"] = useCallback(async (report) => {
+    await mutateSignedInProfile((user) => ({
+      ...user,
+      reports: [{ ...report, id: uid(), createdAt: Date.now() }, ...user.reports],
+    }))
+  }, [])
+
+  const updateProfile: StoreApi["updateProfile"] = useCallback(async (partial) => {
+    await mutateSignedInProfile((user) => ({ ...user, ...partial, email: user.email, password: "" }))
+  }, [])
+
+  const addDependent: StoreApi["addDependent"] = useCallback(async (data) => {
+    await mutateSignedInProfile((user) => ({
+      ...user,
+      dependents: [...user.dependents, { ...data, id: uid(), mediTagId: makeMediTag(), assignedPassword: "" }],
+    }))
+  }, [])
+
+  const updateDependent: StoreApi["updateDependent"] = useCallback(async (id, partial) => {
+    await mutateSignedInProfile((user) => ({
+      ...user,
+      dependents: user.dependents.map((dependent) => dependent.id === id ? { ...dependent, ...partial, assignedPassword: "" } : dependent),
+    }))
+  }, [])
+
+  const removeDependent: StoreApi["removeDependent"] = useCallback(async (id) => {
+    await mutateSignedInProfile((user) => ({ ...user, dependents: user.dependents.filter((dependent) => dependent.id !== id) }))
+  }, [])
+
+  const emergencyProfile = currentUser
+  return {
+    ready, currentUser, emergencyProfile, register, login, loginByCard, getUserByCardId, getUserByEmail,
+    findPatientByCardId, addReportToCard, verifyCredentials, verifyResetIdentity,
+    getDependentByEmail, logout, resetAll, addReport, updateProfile, addDependent, updateDependent, removeDependent,
+  }
 }
 
 export function computeAge(dob: string): number | null {
@@ -107,15 +437,6 @@ export function makeMediTag(): string {
   return `MT-${code}`
 }
 
-/** Ensures a stored profile has all newer fields (backfills for older records). */
-function normalizeUser(user: UserProfile): UserProfile {
-  return {
-    ...user,
-    cardId: user.cardId ?? "",
-    dependents: (user.dependents ?? []).map((d) => ({ ...d, parentalSecretCode: d.parentalSecretCode ?? "" })),
-  }
-}
-
 /** Generates a fallback physical Card/Tag ID like "LV-8H3N2" when a user does not supply one. */
 export function makeCardId(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -126,413 +447,34 @@ export function makeCardId(): string {
 
 /** Client-side strength check for the parental secret code: 5-12 chars, 1 uppercase, 1 number, 1 special. */
 export function validateParentalCode(code: string): { ok: boolean; error?: string } {
-  if (code.length < 5 || code.length > 12) {
-    return { ok: false, error: "Code must be 5 to 12 characters long." }
-  }
+  if (code.length < 5 || code.length > 12) return { ok: false, error: "Code must be 5 to 12 characters long." }
   if (!/[A-Z]/.test(code)) return { ok: false, error: "Add at least one uppercase letter." }
   if (!/[0-9]/.test(code)) return { ok: false, error: "Add at least one number." }
   if (!/[^A-Za-z0-9]/.test(code)) return { ok: false, error: "Add at least one special character (e.g. @, #, $)." }
   return { ok: true }
 }
 
-/**
- * Simulated medical-credential verification engine. Approves only when the scanned
- * document yields a plausible practitioner name, a valid registration/license number
- * format, and a recognized medical council or hospital/clinic institution.
- */
-export function validateMedicalLicense(input: {
-  doctorName: string
-  registrationNumber: string
-  institution: string
-}): { ok: boolean; error?: string } {
+/** Simulated medical-credential verification engine. */
+export function validateMedicalLicense(input: { doctorName: string; registrationNumber: string; institution: string }): { ok: boolean; error?: string } {
   const denied = { ok: false, error: "\u26D4 Approval Denied: Unverified or Invalid Medical License Credentials." }
   const name = input.doctorName.trim()
   const reg = input.registrationNumber.trim()
   const inst = input.institution.trim()
-
   if (!name || name.replace(/[^A-Za-z]/g, "").length < 3) return denied
-  // Registration number: optional council prefix (letters) then at least 4 digits.
   if (!/^[A-Za-z]{0,6}[-/ ]?\d{4,}$/.test(reg)) return denied
-  // Institution must reference a recognized council or a clinical facility.
   const registry = /(nmc|mci|smc|medical council|state medical|council|hospital|clinic|medical|health)/i
   if (!registry.test(inst)) return denied
   return { ok: true }
 }
 
-/**
- * A profile belongs to a minor (child) when the user is under 18.
- * Minors get read-only access; adults (18+) can edit their records.
- */
+/** A profile belongs to a minor (child) when the user is under 18. */
 export function isChildProfile(user: Pick<UserProfile, "dob"> | null | undefined): boolean {
   if (!user) return false
   const age = computeAge(user.dob)
   return age !== null && age < 18
 }
 
-export type StoreApi = {
-  ready: boolean
-  currentUser: UserProfile | null
-  emergencyProfile: UserProfile | null
-  register: (
-    data: Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">,
-  ) => { ok: boolean; error?: string }
-  login: (email: string, password: string) => { ok: boolean; error?: string }
-  /** Quick Card login: authenticates using the physical Card/Tag ID + password. */
-  loginByCard: (cardId: string, password: string) => { ok: boolean; error?: string }
-  /** Looks up a registered user by their physical Card/Tag ID (for emergency snapshots). */
-  getUserByCardId: (cardId: string) => UserProfile | null
-  /** Read-only lookup of a registered account by email (no password / no session change). */
-  getUserByEmail: (email: string) => UserProfile | null
-  /**
-   * Practitioner Step 1 gate. Searches usersDb (by Card/Tag ID) AND every guardian's dependent
-   * profiles (by their linked account Card/Tag ID or paired MediTag) for an exact match. Returns
-   * the effective Card/Tag ID to target for clinical edits, or null when nothing matches.
-   */
-  findPatientByCardId: (
-    cardId: string,
-  ) => { kind: "user" | "dependent"; cardId: string; name: string } | null
-  /** Attaches a clinical report to the record identified by a Card/Tag ID (no session change). */
-  addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">) => { ok: boolean; error?: string }
-  /** Verifies an email + password pair against the local users database (no session change). */
-  verifyCredentials: (email: string, password: string) => { ok: boolean; error?: string }
-  /**
-   * Forgot-password Step 1 identity gate. Confirms an exact match on BOTH the registered
-   * Email ID and Card/Tag ID against the same account (no session change).
-   */
-  verifyResetIdentity: (email: string, cardId: string) => { ok: boolean; error?: string }
-  /** Forgot-password Step 2 commit. Updates the matched account's password (no session change). */
-  resetPassword: (email: string, newPassword: string) => { ok: boolean; error?: string }
-  /** Finds a linked dependent record (across all guardians) by its assigned login email. */
-  getDependentByEmail: (email: string) => DependentProfile | null
-  logout: () => void
-  resetAll: () => void
-  addReport: (report: Omit<MedicalReport, "id" | "createdAt">) => void
-  updateProfile: (partial: Partial<UserProfile>) => void
-  addDependent: (data: Omit<DependentProfile, "id" | "mediTagId">) => void
-  updateDependent: (id: string, partial: Partial<Omit<DependentProfile, "id">>) => void
-  removeDependent: (id: string) => void
-}
-
-export function useStore(): StoreApi {
-  const [db, setDb] = useState<Database>(EMPTY_DB)
-  const [ready, setReady] = useState(false)
-
-  useEffect(() => {
-    setDb(readDb())
-    setReady(true)
-  }, [])
-
-  const persist = useCallback((next: Database) => {
-    setDb(next)
-    writeDb(next)
-  }, [])
-
-  const rawCurrent = db.session ? db.users[db.session] ?? null : null
-  const currentUser = rawCurrent ? normalizeUser(rawCurrent) : null
-  const allUsers = Object.values(db.users)
-  const rawEmergency = currentUser ?? (allUsers.length > 0 ? allUsers[allUsers.length - 1] : null)
-  const emergencyProfile = rawEmergency ? normalizeUser(rawEmergency) : null
-
-  const register: StoreApi["register"] = useCallback(
-    (data) => {
-      const email = data.email.trim().toLowerCase()
-      if (!email || !data.password) return { ok: false, error: "Email and password are required." }
-      const existing = readDb()
-      if (existing.users[email]) return { ok: false, error: "An account with this email already exists." }
-      const user: UserProfile = {
-        name: data.name.trim(),
-        dob: data.dob,
-        bloodGroup: data.bloodGroup,
-        gender: data.gender,
-        email,
-        password: data.password,
-        cardId: (data.cardId ?? "").trim() || makeCardId(),
-        allergies: [],
-        conditions: [],
-        medications: [],
-        contacts: [],
-        reports: [],
-        dependents: [],
-      }
-      const next: Database = {
-        users: { ...existing.users, [email]: user },
-        session: email,
-      }
-      persist(next)
-      return { ok: true }
-    },
-    [persist],
-  )
-
-  const login: StoreApi["login"] = useCallback(
-    (email, password) => {
-      const key = email.trim().toLowerCase()
-      const existing = readDb()
-      const user = existing.users[key]
-      if (!user) return { ok: false, error: "No account found for this email." }
-      if (user.password !== password) return { ok: false, error: "Incorrect password." }
-      persist({ ...existing, session: key })
-      return { ok: true }
-    },
-    [persist],
-  )
-
-  const loginByCard: StoreApi["loginByCard"] = useCallback(
-    (cardId, password) => {
-      const key = cardId.trim().toLowerCase()
-      if (!key) return { ok: false, error: "Enter your Card/Tag ID." }
-      const existing = readDb()
-      const entry = Object.entries(existing.users).find(
-        ([, u]) => (u.cardId ?? "").trim().toLowerCase() === key,
-      )
-      if (!entry) return { ok: false, error: "No account found for this Card/Tag ID." }
-      const [email, user] = entry
-      if (user.password !== password) return { ok: false, error: "Incorrect password." }
-      persist({ ...existing, session: email })
-      return { ok: true }
-    },
-    [persist],
-  )
-
-  const getUserByCardId: StoreApi["getUserByCardId"] = useCallback((cardId) => {
-    const key = cardId.trim().toLowerCase()
-    if (!key) return null
-    const existing = readDb()
-    const match = Object.values(existing.users).find(
-      (u) => (u.cardId ?? "").trim().toLowerCase() === key,
-    )
-    return match ? normalizeUser(match) : null
-  }, [])
-
-  const getUserByEmail: StoreApi["getUserByEmail"] = useCallback((email) => {
-    const key = email.trim().toLowerCase()
-    if (!key) return null
-    const existing = readDb()
-    const user = existing.users[key]
-    return user ? normalizeUser(user) : null
-  }, [])
-
-  const findPatientByCardId: StoreApi["findPatientByCardId"] = useCallback((cardId) => {
-    const key = cardId.trim().toLowerCase()
-    if (!key) return null
-    const existing = readDb()
-    // 1) Direct match against a registered account's physical Card/Tag ID.
-    const userMatch = Object.values(existing.users).find(
-      (u) => (u.cardId ?? "").trim().toLowerCase() === key,
-    )
-    if (userMatch) return { kind: "user", cardId: userMatch.cardId, name: userMatch.name }
-    // 2) Match against any guardian's dependents — by the dependent's linked account Card/Tag ID
-    //    or its paired MediTag. Resolve back to the linked account's Card/Tag ID so clinical
-    //    reports can be attached to the real record.
-    for (const u of Object.values(existing.users)) {
-      for (const d of u.dependents ?? []) {
-        const linked = existing.users[(d.assignedEmail ?? "").trim().toLowerCase()]
-        const linkedCard = (linked?.cardId ?? "").trim().toLowerCase()
-        const tag = (d.mediTagId ?? "").trim().toLowerCase()
-        if ((linkedCard && linkedCard === key) || (tag && tag === key)) {
-          return { kind: "dependent", cardId: linked?.cardId ?? d.mediTagId, name: d.name }
-        }
-      }
-    }
-    return null
-  }, [])
-
-  const addReportToCard: StoreApi["addReportToCard"] = useCallback(
-    (cardId, report) => {
-      const key = cardId.trim().toLowerCase()
-      const existing = readDb()
-      const entry = Object.entries(existing.users).find(
-        ([, u]) => (u.cardId ?? "").trim().toLowerCase() === key,
-      )
-      if (!entry) return { ok: false, error: "No patient found for this Card/Tag ID." }
-      const [email, user] = entry
-      const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
-      const updated: UserProfile = { ...normalizeUser(user), reports: [newReport, ...user.reports] }
-      persist({ ...existing, users: { ...existing.users, [email]: updated } })
-      return { ok: true }
-    },
-    [persist],
-  )
-
-  const verifyCredentials: StoreApi["verifyCredentials"] = useCallback((email, password) => {
-    const key = email.trim().toLowerCase()
-    if (!key || !password) return { ok: false, error: "Enter the child's email and password." }
-    const existing = readDb()
-    const user = existing.users[key]
-    if (!user) return { ok: false, error: "No account found for this email." }
-    if (user.password !== password) return { ok: false, error: "Incorrect password for this account." }
-    return { ok: true }
-  }, [])
-
-  const verifyResetIdentity: StoreApi["verifyResetIdentity"] = useCallback((email, cardId) => {
-    const emailKey = email.trim().toLowerCase()
-    const cardKey = cardId.trim().toLowerCase()
-    if (!emailKey || !cardKey) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
-    const existing = readDb()
-    const user = existing.users[emailKey]
-    if (!user || (user.cardId ?? "").trim().toLowerCase() !== cardKey) {
-      return { ok: false, error: "\u26D4 Invalid credentials: Email ID and Card/Tag ID do not match." }
-    }
-    return { ok: true }
-  }, [])
-
-  const resetPassword: StoreApi["resetPassword"] = useCallback(
-    (email, newPassword) => {
-      const emailKey = email.trim().toLowerCase()
-      if (!newPassword) return { ok: false, error: "Enter a new password." }
-      const existing = readDb()
-      const user = existing.users[emailKey]
-      if (!user) return { ok: false, error: "No account found for this email." }
-      const updated: UserProfile = { ...normalizeUser(user), password: newPassword }
-      persist({ ...existing, users: { ...existing.users, [emailKey]: updated } })
-      return { ok: true }
-    },
-    [persist],
-  )
-
-  const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback((email) => {
-    const key = email.trim().toLowerCase()
-    if (!key) return null
-    const existing = readDb()
-    for (const u of Object.values(existing.users)) {
-      const match = (u.dependents ?? []).find((d) => d.assignedEmail.trim().toLowerCase() === key)
-      if (match) return { ...match, parentalSecretCode: match.parentalSecretCode ?? "" }
-    }
-    return null
-  }, [])
-
-  const logout: StoreApi["logout"] = useCallback(() => {
-    const existing = readDb()
-    persist({ ...existing, session: null })
-  }, [persist])
-
-  // Demo utility: wipe ALL stored accounts, reports, and the active session so
-  // profiles can be swapped cleanly during live testing.
-  const resetAll: StoreApi["resetAll"] = useCallback(() => {
-    if (typeof window !== "undefined") window.localStorage.removeItem(KEY)
-    setDb(EMPTY_DB)
-  }, [])
-
-  const addReport: StoreApi["addReport"] = useCallback(
-    (report) => {
-      const existing = readDb()
-      if (!existing.session) return
-      const user = existing.users[existing.session]
-      if (!user) return
-      const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
-      const updated: UserProfile = { ...user, reports: [newReport, ...user.reports] }
-      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
-    },
-    [persist],
-  )
-
-  const updateProfile: StoreApi["updateProfile"] = useCallback(
-    (partial) => {
-      const existing = readDb()
-      if (!existing.session) return
-      const user = existing.users[existing.session]
-      if (!user) return
-      const updated: UserProfile = { ...user, ...partial }
-      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
-    },
-    [persist],
-  )
-
-  const addDependent: StoreApi["addDependent"] = useCallback(
-    (data) => {
-      const existing = readDb()
-      if (!existing.session) return
-      const user = existing.users[existing.session]
-      if (!user) return
-      const dependent: DependentProfile = { ...data, id: uid(), mediTagId: makeMediTag() }
-      const updated: UserProfile = {
-        ...normalizeUser(user),
-        dependents: [...(user.dependents ?? []), dependent],
-      }
-      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
-    },
-    [persist],
-  )
-
-  const updateDependent: StoreApi["updateDependent"] = useCallback(
-    (id, partial) => {
-      const existing = readDb()
-      if (!existing.session) return
-      const user = existing.users[existing.session]
-      if (!user) return
-      const updated: UserProfile = {
-        ...normalizeUser(user),
-        dependents: (user.dependents ?? []).map((d) => (d.id === id ? { ...d, ...partial } : d)),
-      }
-      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
-    },
-    [persist],
-  )
-
-  const removeDependent: StoreApi["removeDependent"] = useCallback(
-    (id) => {
-      const existing = readDb()
-      if (!existing.session) return
-      const user = existing.users[existing.session]
-      if (!user) return
-      const updated: UserProfile = {
-        ...normalizeUser(user),
-        dependents: (user.dependents ?? []).filter((d) => d.id !== id),
-      }
-      persist({ ...existing, users: { ...existing.users, [existing.session]: updated } })
-    },
-    [persist],
-  )
-
-  return {
-    ready,
-    currentUser,
-    emergencyProfile,
-    register,
-    login,
-    loginByCard,
-    getUserByCardId,
-    getUserByEmail,
-    findPatientByCardId,
-    addReportToCard,
-    verifyCredentials,
-    verifyResetIdentity,
-    resetPassword,
-    getDependentByEmail,
-    logout,
-    resetAll,
-    addReport,
-    updateProfile,
-    addDependent,
-    updateDependent,
-    removeDependent,
-  }
-}
-
 export const RELATIONSHIPS = ["Child", "Parent", "Spouse", "Sibling", "Grandparent", "Ward", "Other"]
-
 export const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
-
-export const SPECIALIZATIONS = [
-  "Cardiologist",
-  "Dentist",
-  "General Physician",
-  "Dermatologist",
-  "Orthopedic",
-  "Neurologist",
-  "Radiologist",
-  "ENT Specialist",
-  "Psychiatrist",
-]
-
-export const DEPARTMENTS = [
-  "Cardiology",
-  "Neurology",
-  "Dermatology",
-  "Radiology",
-  "Laboratory",
-  "Orthopedics",
-  "ENT",
-  "Dental",
-  "Psychiatry",
-]
+export const SPECIALIZATIONS = ["Cardiologist", "Dentist", "General Physician", "Dermatologist", "Orthopedic", "Neurologist", "Radiologist", "ENT Specialist", "Psychiatrist"]
+export const DEPARTMENTS = ["Cardiology", "Neurology", "Dermatology", "Radiology", "Laboratory", "Orthopedics", "ENT", "Dental", "Psychiatry"]

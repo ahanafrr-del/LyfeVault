@@ -85,8 +85,8 @@ export function ProfileScreen({
     setEditing(false)
   }
 
-  function save() {
-    store.updateProfile({
+  async function save() {
+    await store.updateProfile({
       name: draft.name.trim(),
       dob: draft.dob,
       gender: draft.gender,

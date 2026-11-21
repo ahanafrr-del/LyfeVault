@@ -107,11 +107,11 @@ export function PractitionerScan({
   }
 
   // Step 1: block unless the patient Card/Tag ID exists in usersDb or a dependent profile.
-  function verifyPatient() {
+  async function verifyPatient() {
     setPatientError(null)
     const id = patientCardId.trim()
     if (!id) return setPatientError("Enter the patient's Card/Tag ID.")
-    const match = store.findPatientByCardId(id)
+    const match = await store.findPatientByCardId(id)
     if (!match) return setPatientError("\u26D4 Error: Patient Card/Tag ID not found.")
     setPatientName(match.name)
     setResolvedCardId(match.cardId)

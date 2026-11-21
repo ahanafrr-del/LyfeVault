@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   Bell,
   Lock,
@@ -72,7 +72,14 @@ export function MinorDashboard({
 
   // Parental override state. The 4-digit code lives on the dependent record that a
   // guardian created when linking this child's login email.
-  const linkedDependent = store.getDependentByEmail(user.email)
+  const [linkedDependent, setLinkedDependent] = useState<Awaited<ReturnType<StoreApi["getDependentByEmail"]>>>(null)
+  useEffect(() => {
+    let active = true
+    void store.getDependentByEmail(user.email).then((dependent) => {
+      if (active) setLinkedDependent(dependent)
+    })
+    return () => { active = false }
+  }, [store.getDependentByEmail, user.email])
   const [pinOpen, setPinOpen] = useState(false)
   const [pin, setPin] = useState("")
   const [pinError, setPinError] = useState<string | null>(null)
@@ -102,8 +109,8 @@ export function MinorDashboard({
     setPinOpen(false)
   }
 
-  function saveEdits() {
-    store.updateProfile({
+  async function saveEdits() {
+    await store.updateProfile({
       bloodGroup: draft.bloodGroup,
       allergies: splitList(draft.allergies),
       conditions: splitList(draft.conditions),

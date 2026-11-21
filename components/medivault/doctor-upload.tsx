@@ -56,7 +56,7 @@ export function DoctorUpload({
     setError(null)
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     if (!doctorName.trim() || !specialization || !date) {
@@ -67,7 +67,7 @@ export function DoctorUpload({
       setError("The doctor's medical license must be verified before uploading.")
       return
     }
-    store.addReport({
+    await store.addReport({
       doctorName: doctorName.trim(),
       specialization,
       clinic: clinic.trim(),

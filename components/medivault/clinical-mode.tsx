@@ -49,22 +49,22 @@ export function ClinicalMode({
   const [flash, setFlash] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  function findPatient() {
+  async function findPatient() {
     setLookupError(null)
     const id = cardId.trim()
     if (!id) return setLookupError("Enter the patient's Card/Tag ID.")
-    const found = store.getUserByCardId(id)
+    const found = await store.getUserByCardId(id)
     if (!found) return setLookupError("No patient found for this Card/Tag ID.")
     setPatient(found)
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     if (!patient) return
     if (!specialization || !date) return setError("Select a specialization and date.")
     if (!signed) return setError("Sign the report before attaching it to the patient feed.")
-    const res = store.addReportToCard(patient.cardId, {
+    const res = await store.addReportToCard(patient.cardId, {
       doctorName: session.doctorName,
       specialization,
       clinic: clinic.trim(),
@@ -73,10 +73,14 @@ export function ClinicalMode({
       licenseNumber: session.registrationNumber,
       fileName: fileName || "clinical-report.pdf",
       notes: notes.trim(),
+    }, {
+      doctorName: session.doctorName,
+      registrationNumber: session.registrationNumber,
+      institution: session.institution,
     })
     if (!res.ok) return setError(res.error ?? "Could not attach the report.")
-    // Refresh the local patient snapshot so the report count updates.
-    setPatient(store.getUserByCardId(patient.cardId))
+    const refreshed = await store.getUserByCardId(patient.cardId)
+    if (refreshed) setPatient(refreshed)
     setSpecialization("")
     setDate("")
     setTime("")
