@@ -370,6 +370,7 @@ export type StoreApi = {
   currentUser: UserProfile | null
   emergencyProfile: UserProfile | null
   register: (data: AuthData) => Promise<Result>
+  signup: (data: AuthData) => Promise<Result>
   login: (email: string, password: string) => Promise<Result>
   loginByCard: (cardId: string, password: string) => Promise<Result>
   /** Looks up a registered user or dependent by physical Card/Tag ID. */
@@ -895,6 +896,7 @@ export function useStore(): StoreApi {
     currentUser,
     emergencyProfile: currentUser,
     register,
+    signup: register,
     login,
     loginByCard,
     getUserByCardId,
