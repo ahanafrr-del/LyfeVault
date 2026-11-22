@@ -1,22 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { deleteApp, initializeApp } from "firebase/app"
-import {
-  browserLocalPersistence,
-  createUserWithEmailAndPassword,
-  inMemoryPersistence,
-  onAuthStateChanged,
-  setPersistence,
-  signInWithCustomToken,
-  signInWithEmailAndPassword,
-  sendPasswordResetEmail,
-  signOut,
-  type User as FirebaseUser,
-} from "firebase/auth"
-import { doc, getDoc, onSnapshot, setDoc } from "firebase/firestore"
-import { httpsCallable } from "firebase/functions"
-import { getFirebaseClient } from "@/lib/firebase"
+import { useCallback, useEffect, useState } from "react"
 
 export type EmergencyContact = {
   id: string
@@ -74,113 +58,176 @@ export type UserProfile = {
   dependents: DependentProfile[]
 }
 
-type CloudProfile = Omit<UserProfile, "password"> & { cardIdNormalized?: string }
 type PatientMatch = { kind: "user" | "dependent"; cardId: string; name: string }
 type Result = { ok: boolean; error?: string }
+type StoredCredential = { salt: string; hash: string }
+type StoredAccount = { credential: StoredCredential; profile: UserProfile }
+type StoredAccounts = Record<string, StoredAccount>
 
+const ACCOUNTS_KEY = "lyfevault_accounts_v1"
 const SESSION_KEY = "medivault_session_v1"
+const PASSWORD_ITERATIONS = 310_000
 
-function profileDoc(email: string) {
-  return doc(getFirebaseClient().db, "users", email.trim().toLowerCase())
+function canUseStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined"
 }
 
-function sanitizeProfile(profile: Partial<UserProfile> & { email: string }): CloudProfile {
-  const { password: _password, ...safeProfile } = profile
-  return {
-    ...safeProfile,
-    email: profile.email.trim().toLowerCase(),
-    cardId: profile.cardId ?? "",
-    cardIdNormalized: (profile.cardId ?? "").trim().toLowerCase(),
-    allergies: profile.allergies ?? [],
-    conditions: profile.conditions ?? [],
-    medications: profile.medications ?? [],
-    contacts: profile.contacts ?? [],
-    reports: profile.reports ?? [],
-    dependents: (profile.dependents ?? []).map(({ assignedPassword: _assignedPassword, ...dependent }) => ({
-      ...dependent,
-      assignedPassword: "",
-      parentalSecretCode: dependent.parentalSecretCode ?? "",
-    })),
-  } as CloudProfile
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase()
+}
+
+function normalizeCardId(cardId: string): string {
+  return cardId.trim().toLowerCase()
 }
 
 function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProfile {
-  const safe = sanitizeProfile(user)
   return {
-    name: safe.name ?? "",
-    dob: safe.dob ?? "",
-    bloodGroup: safe.bloodGroup ?? "",
-    gender: safe.gender ?? "",
-    email: safe.email,
+    name: user.name ?? "",
+    dob: user.dob ?? "",
+    bloodGroup: user.bloodGroup ?? "",
+    gender: user.gender ?? "",
+    email: normalizeEmail(user.email),
     password: "",
-    cardId: safe.cardId ?? "",
-    allergies: safe.allergies ?? [],
-    conditions: safe.conditions ?? [],
-    medications: safe.medications ?? [],
-    contacts: safe.contacts ?? [],
-    reports: safe.reports ?? [],
-    dependents: safe.dependents ?? [],
+    cardId: user.cardId ?? "",
+    allergies: user.allergies ?? [],
+    conditions: user.conditions ?? [],
+    medications: user.medications ?? [],
+    contacts: user.contacts ?? [],
+    reports: user.reports ?? [],
+    dependents: (user.dependents ?? []).map((dependent) => ({
+      ...dependent,
+      assignedEmail: normalizeEmail(dependent.assignedEmail ?? ""),
+      assignedPassword: dependent.assignedPassword ?? "",
+      parentalSecretCode: dependent.parentalSecretCode ?? "",
+      allergies: dependent.allergies ?? [],
+      conditions: dependent.conditions ?? [],
+      contacts: dependent.contacts ?? [],
+    })),
   }
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  const details = error as { code?: string; message?: string; status?: number; statusCode?: number }
-  const code = details?.code?.toLowerCase() ?? ""
-  const message = details?.message?.toLowerCase() ?? ""
-  const status = details?.status ?? details?.statusCode
-  if (code.includes("email-already-in-use") || code.includes("already-exists")) return "An account with this email or Card/Tag ID already exists."
-  if (code.includes("invalid-email")) return "Enter a valid email address."
-  if (code.includes("weak-password")) return "Choose a password with at least 6 characters."
-  if (code.includes("operation-not-allowed")) return "Email and password sign-up is not enabled for this Firebase project."
-  if (status === 0 || /status(?: code)?[: ]+0\b/.test(message)) {
-    return "Firebase returned a network status of 0. Check your connection, browser extensions, and Firebase API key restrictions, then try again."
+function readAccounts(): StoredAccounts {
+  if (!canUseStorage()) return {}
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(ACCOUNTS_KEY) ?? "{}")
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+    const accounts: StoredAccounts = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (!item || typeof item !== "object") continue
+      const entry = item as Partial<StoredAccount>
+      if (!entry.profile || typeof entry.profile.email !== "string") continue
+      if (!entry.credential || typeof entry.credential.salt !== "string" || typeof entry.credential.hash !== "string") continue
+      const email = normalizeEmail(entry.profile.email)
+      accounts[email || key] = {
+        credential: entry.credential,
+        profile: normalizeUser(entry.profile),
+      }
+    }
+    return accounts
+  } catch {
+    return {}
   }
-  if (code.includes("auth/internal-error") || code === "internal" || code.endsWith("/internal")) {
-    return "Firebase returned an internal error. Check that Email/Password sign-in is enabled in Firebase Authentication and try again."
-  }
-  if (code.includes("network-request-failed") || code.includes("unavailable") || code.includes("deadline-exceeded")) {
-    return "Firebase could not be reached. Check your connection and try again."
-  }
-  if (code.includes("invalid-api-key")) return "Firebase rejected this app's API key. Check the Firebase Web App configuration."
-  if (code.includes("functions/not-found")) return "The profile service is not deployed for this Firebase project. Contact the app administrator."
-  if (code.includes("user-not-found")) return "No account found for this email."
-  if (code.includes("wrong-password") || code.includes("invalid-credential") || code.includes("unauthenticated")) return "Incorrect password."
-  if (code.includes("permission-denied")) return "This action is not permitted for this account."
-  if (code.includes("too-many-requests") || code.includes("resource-exhausted")) return "Too many attempts. Wait a little and try again."
-  return fallback
 }
 
-async function mutateSignedInProfile(
-  update: (profile: UserProfile) => UserProfile,
-): Promise<void> {
-  const { auth, db } = getFirebaseClient()
-  const email = auth.currentUser?.email?.trim().toLowerCase()
-  if (!email) return
-  const reference = profileDoc(email)
-  const snapshot = await getDoc(reference)
-  if (!snapshot.exists()) throw new Error("Your cloud profile could not be found.")
-  const current = normalizeUser(snapshot.data() as Partial<UserProfile> & { email: string })
-  await setDoc(reference, sanitizeProfile(update(current)), { merge: true })
+function writeAccounts(accounts: StoredAccounts): boolean {
+  if (!canUseStorage()) return false
+  try {
+    window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts))
+    return true
+  } catch {
+    return false
+  }
 }
+
+function readSessionEmail(): string | null {
+  if (!canUseStorage()) return null
+  try {
+    const email = window.localStorage.getItem(SESSION_KEY)
+    return email ? normalizeEmail(email) : null
+  } catch {
+    return null
+  }
+}
+
+function writeSession(email: string): boolean {
+  if (!canUseStorage()) return false
+  try {
+    window.localStorage.setItem(SESSION_KEY, normalizeEmail(email))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function removeSession(): void {
+  if (!canUseStorage()) return
+  try {
+    window.localStorage.removeItem(SESSION_KEY)
+  } catch {
+    // Storage may be disabled by the browser; in-memory state is still cleared.
+  }
+}
+
+function passwordBytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+async function hashPassword(password: string, saltHex?: string): Promise<StoredCredential> {
+  if (!canUseStorage() || !window.crypto?.subtle) {
+    throw new Error("Secure local password storage is unavailable in this browser. Use HTTPS or a modern browser.")
+  }
+  const salt = saltHex
+    ? Uint8Array.from(saltHex.match(/.{1,2}/g) ?? [], (byte) => Number.parseInt(byte, 16))
+    : window.crypto.getRandomValues(new Uint8Array(16))
+  const key = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"])
+  const bits = await window.crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: PASSWORD_ITERATIONS, hash: "SHA-256" }, key, 256)
+  return { salt: passwordBytesToHex(salt), hash: passwordBytesToHex(new Uint8Array(bits)) }
+}
+
+async function passwordMatches(password: string, credential: StoredCredential): Promise<boolean> {
+  const calculated = await hashPassword(password, credential.salt)
+  return calculated.hash === credential.hash
+}
+
+function dependentAsUser(parent: UserProfile, dependent: DependentProfile): UserProfile {
+  return normalizeUser({
+    name: dependent.name,
+    dob: dependent.dob,
+    bloodGroup: dependent.bloodGroup,
+    gender: "",
+    email: dependent.assignedEmail || parent.email,
+    password: "",
+    cardId: dependent.mediTagId,
+    allergies: dependent.allergies,
+    conditions: dependent.conditions,
+    medications: [],
+    contacts: dependent.contacts,
+    reports: [],
+    dependents: [],
+  })
+}
+
+type AuthData = Omit<Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">, "cardId"> & { cardId?: string }
+type Practitioner = { doctorName: string; registrationNumber: string; institution: string }
 
 export type StoreApi = {
   ready: boolean
   currentUser: UserProfile | null
   emergencyProfile: UserProfile | null
-  register: (data: Omit<Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">, "cardId"> & { cardId?: string }) => Promise<Result>
+  register: (data: AuthData) => Promise<Result>
   login: (email: string, password: string) => Promise<Result>
-  /** Quick Card login: authenticates using the physical Card/Tag ID + password. */
   loginByCard: (cardId: string, password: string) => Promise<Result>
-  /** Looks up a registered user by their physical Card/Tag ID (for emergency snapshots). */
+  /** Looks up a registered user or dependent by physical Card/Tag ID. */
   getUserByCardId: (cardId: string) => Promise<UserProfile | null>
-  /** Read-only lookup of a registered account by email (no password / no session change). */
+  /** Read-only lookup of a locally registered account by email. */
   getUserByEmail: (email: string) => Promise<UserProfile | null>
-  /** Searches registered profiles and linked dependents for an exact Card/Tag ID. */
+  /** Searches local profiles and linked dependents for an exact Card/Tag ID. */
   findPatientByCardId: (cardId: string) => Promise<PatientMatch | null>
-  /** Attaches a clinical report to the record identified by a Card/Tag ID. */
-  addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">, practitioner?: { doctorName: string; registrationNumber: string; institution: string }) => Promise<Result>
+  /** Attaches a clinical report to the profile identified by a Card/Tag ID. */
+  addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">, practitioner?: Practitioner) => Promise<Result>
   verifyCredentials: (email: string, password: string) => Promise<Result>
   verifyResetIdentity: (email: string, cardId: string) => Promise<Result>
+  resetPassword: (email: string, cardId: string, password: string) => Promise<Result>
   getDependentByEmail: (email: string) => Promise<DependentProfile | null>
   logout: () => Promise<void>
   resetAll: () => void
@@ -194,259 +241,292 @@ export type StoreApi = {
 export function useStore(): StoreApi {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null)
   const [ready, setReady] = useState(false)
-  const pendingRegistration = useRef<{ uid: string; email: string; profile: CloudProfile } | null>(null)
+
   useEffect(() => {
-    let alive = true
-    let unsubscribeAuth = () => {}
-    let unsubscribeProfile = () => {}
-    let auth
-    try {
-      auth = getFirebaseClient().auth
-    } catch {
+    let active = true
+    queueMicrotask(() => {
+      if (!active) return
+      const email = readSessionEmail()
+      const account = email ? readAccounts()[email] : undefined
+      setCurrentUser(account ? normalizeUser(account.profile) : null)
       setReady(true)
-      return () => { alive = false }
-    }
-    setPersistence(auth, browserLocalPersistence)
-      .then(() => {
-        if (!alive) return
-        unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser: FirebaseUser | null) => {
-          unsubscribeProfile()
-          unsubscribeProfile = () => {}
-          if (!firebaseUser?.email) {
-            window.localStorage.removeItem(SESSION_KEY)
-            setCurrentUser(null)
-            setReady(true)
-            return
-          }
-          const email = firebaseUser.email.trim().toLowerCase()
-          window.localStorage.setItem(SESSION_KEY, email)
-          unsubscribeProfile = onSnapshot(
-            profileDoc(email),
-            (snapshot) => {
-              setCurrentUser(snapshot.exists() ? normalizeUser(snapshot.data() as Partial<UserProfile> & { email: string }) : null)
-              setReady(true)
-            },
-            () => {
-              setCurrentUser(null)
-              setReady(true)
-            },
-          )
-        })
-      })
-      .catch(() => {
-        setCurrentUser(null)
-        setReady(true)
-      })
-    return () => {
-      alive = false
-      unsubscribeAuth()
-      unsubscribeProfile()
-    }
+    })
+    return () => { active = false }
   }, [])
 
   const register: StoreApi["register"] = useCallback(async (data) => {
-    const email = data.email.trim().toLowerCase()
-    if (!email || !data.password) return { ok: false, error: "Email and password are required." }
+    const email = normalizeEmail(data.email)
+    const password = data.password
+    if (!email || !password) return { ok: false, error: "Email and password are required." }
+    if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
+    if (!canUseStorage()) return { ok: false, error: "Sign-up is only available in a browser." }
 
-    const user: UserProfile = {
-      name: data.name.trim(), dob: data.dob, bloodGroup: data.bloodGroup, gender: data.gender,
-      email, password: "", cardId: data.cardId?.trim() ?? "", allergies: [], conditions: [], medications: [],
-      contacts: [], reports: [], dependents: [],
-    }
-    const profile = sanitizeProfile(user)
-    const { auth } = getFirebaseClient()
-    let firebaseUser = auth.currentUser
-    const canRetryProfile = pendingRegistration.current?.email === email && pendingRegistration.current.uid === firebaseUser?.uid
-
-    if (!canRetryProfile) {
-      pendingRegistration.current = null
-      try {
-        firebaseUser = (await createUserWithEmailAndPassword(auth, email, data.password)).user
-      } catch (error) {
-        return { ok: false, error: errorMessage(error, "Firebase Authentication could not create your account. Try again.") }
-      }
-      pendingRegistration.current = { uid: firebaseUser.uid, email, profile }
-    } else {
-      pendingRegistration.current = { ...pendingRegistration.current!, profile }
-    }
+    const accounts = readAccounts()
+    if (accounts[email]) return { ok: false, error: "An account with this email already exists." }
+    const cardId = data.cardId?.trim() ?? ""
+    if (cardId && Object.values(accounts).some(({ profile }) => (
+      normalizeCardId(profile.cardId) === normalizeCardId(cardId) ||
+      profile.dependents.some((dependent) => normalizeCardId(dependent.mediTagId) === normalizeCardId(cardId))
+    ))) return { ok: false, error: "This Card/Tag ID is already registered." }
 
     try {
-      if (user.cardId) {
-        await httpsCallable(getFirebaseClient().functions, "createProfile")({ profile })
-      } else {
-        await setDoc(profileDoc(email), profile)
-      }
-      pendingRegistration.current = null
-      setCurrentUser(normalizeUser(user))
+      const credential = await hashPassword(password)
+      const profile = normalizeUser({
+        ...data,
+        email,
+        password: "",
+        cardId,
+        allergies: [],
+        conditions: [],
+        medications: [],
+        contacts: [],
+        reports: [],
+        dependents: [],
+      })
+      accounts[email] = { credential, profile }
+      if (!writeAccounts(accounts)) return { ok: false, error: "Your browser could not save this account. Check local storage settings and try again." }
+      if (!writeSession(email)) return { ok: false, error: "Your account was saved, but this browser could not persist the sign-in session." }
+      setCurrentUser(profile)
       return { ok: true }
     } catch (error) {
-      return {
-        ok: false,
-        error: `Your Firebase account was created, but Firestore could not save your profile. Your account has not been deleted. Retry sign-up to finish saving it. ${errorMessage(error, "Check the Firestore connection, rules, and profile service deployment.")}`,
-      }
+      return { ok: false, error: error instanceof Error ? error.message : "Could not create the account." }
     }
   }, [])
 
   const login: StoreApi["login"] = useCallback(async (email, password) => {
-    const key = email.trim().toLowerCase()
+    const key = normalizeEmail(email)
     if (!key || !password) return { ok: false, error: "Email and password are required." }
-    try {
-      const { auth } = getFirebaseClient()
-      await signInWithEmailAndPassword(auth, key, password)
-      window.localStorage.setItem(SESSION_KEY, key)
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: errorMessage(error, "Login failed. Check the Firebase connection and try again.") }
+    const account = readAccounts()[key]
+    if (!account || !(await passwordMatches(password, account.credential))) {
+      return { ok: false, error: "Email or password is incorrect." }
     }
+    if (!writeSession(key)) return { ok: false, error: "This browser could not save the sign-in session." }
+    setCurrentUser(normalizeUser(account.profile))
+    return { ok: true }
   }, [])
 
   const loginByCard: StoreApi["loginByCard"] = useCallback(async (cardId, password) => {
-    const id = cardId.trim()
-    if (!id) return { ok: false, error: "Enter your Card/Tag ID." }
-    try {
-      const { auth, functions, app } = getFirebaseClient()
-      const result = await httpsCallable<{ cardId: string; password: string; apiKey?: string }, { token: string }>(functions, "loginByCard")({
-        cardId: id, password, apiKey: app.options.apiKey,
-      })
-      await signInWithCustomToken(auth, result.data.token)
-      const email = auth.currentUser?.email?.trim().toLowerCase()
-      if (email) window.localStorage.setItem(SESSION_KEY, email)
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: errorMessage(error, "Card login failed. Check the Firebase connection and try again.") }
+    const target = normalizeCardId(cardId)
+    if (!target) return { ok: false, error: "Enter your Card/Tag ID." }
+    const accounts = readAccounts()
+    const match = Object.entries(accounts).find(([, account]) => normalizeCardId(account.profile.cardId) === target)
+    if (!match || !(await passwordMatches(password, match[1].credential))) {
+      return { ok: false, error: "Card/Tag ID or password is incorrect." }
     }
+    if (!writeSession(match[0])) return { ok: false, error: "This browser could not save the sign-in session." }
+    setCurrentUser(normalizeUser(match[1].profile))
+    return { ok: true }
   }, [])
 
   const getUserByCardId: StoreApi["getUserByCardId"] = useCallback(async (cardId) => {
-    if (!cardId.trim()) return null
-    try {
-      const { functions } = getFirebaseClient()
-      const result = await httpsCallable<{ cardId: string }, UserProfile>(functions, "lookupByCardId")({ cardId: cardId.trim() })
-      return normalizeUser(result.data)
-    } catch {
-      return null
+    const target = normalizeCardId(cardId)
+    if (!target) return null
+    for (const { profile } of Object.values(readAccounts())) {
+      if (normalizeCardId(profile.cardId) === target) return normalizeUser(profile)
+      const dependent = profile.dependents.find((item) => normalizeCardId(item.mediTagId) === target)
+      if (dependent) return dependentAsUser(profile, dependent)
     }
+    return null
   }, [])
 
   const getUserByEmail: StoreApi["getUserByEmail"] = useCallback(async (email) => {
-    if (!email.trim()) return null
-    try {
-      const { functions } = getFirebaseClient()
-      const result = await httpsCallable<{ email: string }, UserProfile | null>(functions, "getUserByEmail")({ email: email.trim() })
-      return result.data ? normalizeUser(result.data) : null
-    } catch {
-      return null
+    const key = normalizeEmail(email)
+    if (!key) return null
+    const accounts = readAccounts()
+    if (accounts[key]) return normalizeUser(accounts[key].profile)
+    for (const { profile } of Object.values(accounts)) {
+      const dependent = profile.dependents.find((item) => item.assignedEmail === key)
+      if (dependent) return dependentAsUser(profile, dependent)
     }
+    return null
   }, [])
 
   const findPatientByCardId: StoreApi["findPatientByCardId"] = useCallback(async (cardId) => {
-    if (!cardId.trim()) return null
-    try {
-      const { functions } = getFirebaseClient()
-      const result = await httpsCallable<{ cardId: string }, PatientMatch | null>(functions, "findPatientByCardId")({ cardId: cardId.trim() })
-      return result.data
-    } catch {
-      return null
+    const target = normalizeCardId(cardId)
+    if (!target) return null
+    for (const { profile } of Object.values(readAccounts())) {
+      if (normalizeCardId(profile.cardId) === target) return { kind: "user", cardId: profile.cardId, name: profile.name }
+      const dependent = profile.dependents.find((item) => normalizeCardId(item.mediTagId) === target)
+      if (dependent) return { kind: "dependent", cardId: dependent.mediTagId, name: dependent.name }
     }
+    return null
+  }, [])
+
+  const updateStoredProfile = useCallback((update: (profile: UserProfile) => UserProfile) => {
+    const email = readSessionEmail()
+    if (!email) throw new Error("Sign in to update your profile.")
+    const accounts = readAccounts()
+    const account = accounts[email]
+    if (!account) throw new Error("Your local profile could not be found.")
+    const profile = normalizeUser(update(normalizeUser(account.profile)))
+    accounts[email] = { ...account, profile }
+    if (!writeAccounts(accounts)) throw new Error("Your browser could not save this change. Check local storage settings and try again.")
+    setCurrentUser(profile)
+    return profile
   }, [])
 
   const addReportToCard: StoreApi["addReportToCard"] = useCallback(async (cardId, report, practitioner) => {
     if (!practitioner) return { ok: false, error: "Practitioner identity is required." }
-    try {
-      const { functions } = getFirebaseClient()
-      await httpsCallable(functions, "addReportToCard")({ cardId, report, practitioner })
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: errorMessage(error, "Could not attach the report.") }
-    }
+    const target = normalizeCardId(cardId)
+    const accounts = readAccounts()
+    const match = Object.entries(accounts).find(([, account]) => normalizeCardId(account.profile.cardId) === target)
+    if (!match) return { ok: false, error: "No registered account was found for this Card/Tag ID." }
+    const [email, account] = match
+    const updated = normalizeUser({
+      ...account.profile,
+      reports: [{ ...report, id: uid(), createdAt: Date.now() }, ...account.profile.reports],
+    })
+    accounts[email] = { ...account, profile: updated }
+    if (!writeAccounts(accounts)) return { ok: false, error: "Your browser could not save the report." }
+    if (readSessionEmail() === email) setCurrentUser(updated)
+    return { ok: true }
   }, [])
 
   const verifyCredentials: StoreApi["verifyCredentials"] = useCallback(async (email, password) => {
-    const key = email.trim().toLowerCase()
+    const key = normalizeEmail(email)
     if (!key || !password) return { ok: false, error: "Enter the child's email and password." }
-    let secondaryApp
-    try {
-      const { app } = getFirebaseClient()
-      secondaryApp = initializeApp(app.options, `credential-check-${Date.now()}`)
-      const secondaryAuth = (await import("firebase/auth")).getAuth(secondaryApp)
-      await setPersistence(secondaryAuth, inMemoryPersistence)
-      await signInWithEmailAndPassword(secondaryAuth, key, password)
-      await signOut(secondaryAuth)
-      await deleteApp(secondaryApp)
-      return { ok: true }
-    } catch (error) {
-      if (secondaryApp) await deleteApp(secondaryApp).catch(() => {})
-      return { ok: false, error: errorMessage(error, "Could not verify the child's account.") }
-    }
+    const accounts = readAccounts()
+    const account = accounts[key]
+    if (account && await passwordMatches(password, account.credential)) return { ok: true }
+    const dependent = Object.values(accounts).some(({ profile }) => profile.dependents.some((item) => (
+      item.assignedEmail === key && item.assignedPassword === password
+    )))
+    return dependent
+      ? { ok: true }
+      : { ok: false, error: "No local account matches that email and password." }
   }, [])
 
   const verifyResetIdentity: StoreApi["verifyResetIdentity"] = useCallback(async (email, cardId) => {
-    if (!email.trim() || !cardId.trim()) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
-    try {
-      const { auth, functions } = getFirebaseClient()
-      await httpsCallable(functions, "verifyResetIdentity")({ email, cardId })
-      await sendPasswordResetEmail(auth, email.trim().toLowerCase())
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: errorMessage(error, "Email ID and Card/Tag ID do not match.") }
-    }
+    const key = normalizeEmail(email)
+    const target = normalizeCardId(cardId)
+    if (!key || !target) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
+    const accounts = readAccounts()
+    const account = accounts[key]
+    if (account && normalizeCardId(account.profile.cardId) === target) return { ok: true }
+    const dependent = Object.values(accounts).some(({ profile }) => profile.dependents.some((item) => (
+      item.assignedEmail === key && normalizeCardId(item.mediTagId) === target
+    )))
+    return dependent
+      ? { ok: true }
+      : { ok: false, error: "Email ID and Card/Tag ID do not match a local account." }
   }, [])
 
-  const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback(async (email) => {
+  const resetPassword: StoreApi["resetPassword"] = useCallback(async (email, cardId, password) => {
+    const key = normalizeEmail(email)
+    if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
+    const identity = await verifyResetIdentity(key, cardId)
+    if (!identity.ok) return identity
+
     try {
-      const { functions } = getFirebaseClient()
-      const result = await httpsCallable<{ email: string }, DependentProfile | null>(functions, "getDependentByEmail")({ email })
-      return result.data
-    } catch {
-      return null
+      const accounts = readAccounts()
+      const account = accounts[key]
+      if (account) {
+        accounts[key] = { ...account, credential: await hashPassword(password) }
+      } else {
+        let updatedDependent = false
+        for (const [ownerEmail, owner] of Object.entries(accounts)) {
+          const dependents = owner.profile.dependents.map((dependent) => {
+            if (dependent.assignedEmail !== key || normalizeCardId(dependent.mediTagId) !== normalizeCardId(cardId)) return dependent
+            updatedDependent = true
+            return { ...dependent, assignedPassword: password }
+          })
+          if (updatedDependent) accounts[ownerEmail] = { ...owner, profile: { ...owner.profile, dependents } }
+        }
+        if (!updatedDependent) return { ok: false, error: "The local account could not be found." }
+      }
+      return writeAccounts(accounts)
+        ? { ok: true }
+        : { ok: false, error: "Your browser could not save the new password." }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not reset the password." }
     }
+  }, [verifyResetIdentity])
+
+  const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback(async (email) => {
+    const key = normalizeEmail(email)
+    for (const { profile } of Object.values(readAccounts())) {
+      const dependent = profile.dependents.find((item) => item.assignedEmail === key)
+      if (dependent) return { ...dependent }
+    }
+    return null
   }, [])
 
   const logout: StoreApi["logout"] = useCallback(async () => {
-    window.localStorage.removeItem(SESSION_KEY)
-    await signOut(getFirebaseClient().auth)
+    removeSession()
+    setCurrentUser(null)
   }, [])
 
   const resetAll: StoreApi["resetAll"] = useCallback(() => {
-    window.localStorage.removeItem(SESSION_KEY)
+    removeSession()
+    if (canUseStorage()) {
+      try {
+        window.localStorage.removeItem(ACCOUNTS_KEY)
+      } catch {
+        // In-memory state is still cleared if storage is unavailable.
+      }
+    }
     setCurrentUser(null)
-    void signOut(getFirebaseClient().auth)
+    setReady(true)
   }, [])
 
   const addReport: StoreApi["addReport"] = useCallback(async (report) => {
-    await mutateSignedInProfile((user) => ({
-      ...user,
-      reports: [{ ...report, id: uid(), createdAt: Date.now() }, ...user.reports],
+    updateStoredProfile((profile) => ({
+      ...profile,
+      reports: [{ ...report, id: uid(), createdAt: Date.now() }, ...profile.reports],
     }))
-  }, [])
+  }, [updateStoredProfile])
 
   const updateProfile: StoreApi["updateProfile"] = useCallback(async (partial) => {
-    await mutateSignedInProfile((user) => ({ ...user, ...partial, email: user.email, password: "" }))
-  }, [])
+    updateStoredProfile((profile) => ({ ...profile, ...partial, email: profile.email, password: "" }))
+  }, [updateStoredProfile])
 
   const addDependent: StoreApi["addDependent"] = useCallback(async (data) => {
-    await mutateSignedInProfile((user) => ({
-      ...user,
-      dependents: [...user.dependents, { ...data, id: uid(), mediTagId: makeMediTag(), assignedPassword: "" }],
+    updateStoredProfile((profile) => ({
+      ...profile,
+      dependents: [...profile.dependents, {
+        ...data,
+        assignedEmail: normalizeEmail(data.assignedEmail),
+        id: uid(),
+        mediTagId: makeMediTag(),
+      }],
     }))
-  }, [])
+  }, [updateStoredProfile])
 
   const updateDependent: StoreApi["updateDependent"] = useCallback(async (id, partial) => {
-    await mutateSignedInProfile((user) => ({
-      ...user,
-      dependents: user.dependents.map((dependent) => dependent.id === id ? { ...dependent, ...partial, assignedPassword: "" } : dependent),
+    updateStoredProfile((profile) => ({
+      ...profile,
+      dependents: profile.dependents.map((dependent) => dependent.id === id
+        ? { ...dependent, ...partial, id, assignedEmail: normalizeEmail(partial.assignedEmail ?? dependent.assignedEmail) }
+        : dependent),
     }))
-  }, [])
+  }, [updateStoredProfile])
 
   const removeDependent: StoreApi["removeDependent"] = useCallback(async (id) => {
-    await mutateSignedInProfile((user) => ({ ...user, dependents: user.dependents.filter((dependent) => dependent.id !== id) }))
-  }, [])
+    updateStoredProfile((profile) => ({ ...profile, dependents: profile.dependents.filter((dependent) => dependent.id !== id) }))
+  }, [updateStoredProfile])
 
-  const emergencyProfile = currentUser
   return {
-    ready, currentUser, emergencyProfile, register, login, loginByCard, getUserByCardId, getUserByEmail,
-    findPatientByCardId, addReportToCard, verifyCredentials, verifyResetIdentity,
-    getDependentByEmail, logout, resetAll, addReport, updateProfile, addDependent, updateDependent, removeDependent,
+    ready,
+    currentUser,
+    emergencyProfile: currentUser,
+    register,
+    login,
+    loginByCard,
+    getUserByCardId,
+    getUserByEmail,
+    findPatientByCardId,
+    addReportToCard,
+    verifyCredentials,
+    verifyResetIdentity,
+    resetPassword,
+    getDependentByEmail,
+    logout,
+    resetAll,
+    addReport,
+    updateProfile,
+    addDependent,
+    updateDependent,
+    removeDependent,
   }
 }
 
@@ -492,7 +572,7 @@ export function validateParentalCode(code: string): { ok: boolean; error?: strin
 
 /** Simulated medical-credential verification engine. */
 export function validateMedicalLicense(input: { doctorName: string; registrationNumber: string; institution: string }): { ok: boolean; error?: string } {
-  const denied = { ok: false, error: "\u26D4 Approval Denied: Unverified or Invalid Medical License Credentials." }
+  const denied = { ok: false, error: "⛔ Approval Denied: Unverified or Invalid Medical License Credentials." }
   const name = input.doctorName.trim()
   const reg = input.registrationNumber.trim()
   const inst = input.institution.trim()
