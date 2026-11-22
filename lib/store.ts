@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { supabase } from "./supabase"
 
 export type EmergencyContact = {
   id: string
@@ -61,10 +62,53 @@ export type UserProfile = {
 type PatientMatch = { kind: "user" | "dependent"; cardId: string; name: string }
 type Result = { ok: boolean; error?: string }
 type StoredCredential = { salt: string; hash: string }
-type StoredAccount = { credential: StoredCredential; profile: UserProfile }
-type StoredAccounts = Record<string, StoredAccount>
 
-const ACCOUNTS_KEY = "lyfevault_accounts_v1"
+type ProfileRow = {
+  email: string
+  password_salt: string
+  password_hash: string
+  name: string | null
+  dob: string | null
+  blood_group: string | null
+  gender: string | null
+  card_id: string | null
+  allergies: unknown
+  conditions: unknown
+  medications: unknown
+  contacts: unknown
+  updated_at: number | string | null
+}
+
+type ReportRow = {
+  id: string
+  owner_email: string
+  doctor_name: string | null
+  specialization: string | null
+  clinic: string | null
+  date: string | null
+  time: string | null
+  license_number: string | null
+  file_name: string | null
+  notes: string | null
+  created_at: number | string | null
+}
+
+type DependentRow = {
+  id: string
+  owner_email: string
+  name: string | null
+  dob: string | null
+  relationship: string | null
+  blood_group: string | null
+  allergies: unknown
+  conditions: unknown
+  contacts: unknown
+  assigned_email: string | null
+  assigned_password: string | null
+  parental_secret_code: string | null
+  medi_tag_id: string | null
+}
+
 const SESSION_KEY = "medivault_session_v1"
 const PASSWORD_ITERATIONS = 310_000
 
@@ -78,6 +122,23 @@ function normalizeEmail(email: string): string {
 
 function normalizeCardId(cardId: string): string {
   return cardId.trim().toLowerCase()
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)) : []
+}
+
+function asContactsArray(value: unknown): EmergencyContact[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => {
+    const contact = (item && typeof item === "object" ? item : {}) as Partial<EmergencyContact>
+    return {
+      id: String(contact.id ?? ""),
+      name: String(contact.name ?? ""),
+      relation: String(contact.relation ?? ""),
+      phone: String(contact.phone ?? ""),
+    }
+  })
 }
 
 function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProfile {
@@ -103,39 +164,6 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
       conditions: dependent.conditions ?? [],
       contacts: dependent.contacts ?? [],
     })),
-  }
-}
-
-function readAccounts(): StoredAccounts {
-  if (!canUseStorage()) return {}
-  try {
-    const value: unknown = JSON.parse(window.localStorage.getItem(ACCOUNTS_KEY) ?? "{}")
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-    const accounts: StoredAccounts = {}
-    for (const [key, item] of Object.entries(value)) {
-      if (!item || typeof item !== "object") continue
-      const entry = item as Partial<StoredAccount>
-      if (!entry.profile || typeof entry.profile.email !== "string") continue
-      if (!entry.credential || typeof entry.credential.salt !== "string" || typeof entry.credential.hash !== "string") continue
-      const email = normalizeEmail(entry.profile.email)
-      accounts[email || key] = {
-        credential: entry.credential,
-        profile: normalizeUser(entry.profile),
-      }
-    }
-    return accounts
-  } catch {
-    return {}
-  }
-}
-
-function writeAccounts(accounts: StoredAccounts): boolean {
-  if (!canUseStorage()) return false
-  try {
-    window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts))
-    return true
-  } catch {
-    return false
   }
 }
 
@@ -173,8 +201,8 @@ function passwordBytesToHex(bytes: Uint8Array): string {
 }
 
 async function hashPassword(password: string, saltHex?: string): Promise<StoredCredential> {
-  if (!canUseStorage() || !window.crypto?.subtle) {
-    throw new Error("Secure local password storage is unavailable in this browser. Use HTTPS or a modern browser.")
+  if (typeof window === "undefined" || !window.crypto?.subtle) {
+    throw new Error("Secure password hashing is unavailable in this environment. Use HTTPS or a modern browser.")
   }
   const salt = saltHex
     ? Uint8Array.from(saltHex.match(/.{1,2}/g) ?? [], (byte) => Number.parseInt(byte, 16))
@@ -205,6 +233,133 @@ function dependentAsUser(parent: UserProfile, dependent: DependentProfile): User
     reports: [],
     dependents: [],
   })
+}
+
+function mapDependentRow(row: DependentRow): DependentProfile {
+  return {
+    id: row.id,
+    name: row.name ?? "",
+    dob: row.dob ?? "",
+    relationship: row.relationship ?? "",
+    bloodGroup: row.blood_group ?? "",
+    allergies: asStringArray(row.allergies),
+    conditions: asStringArray(row.conditions),
+    contacts: asContactsArray(row.contacts),
+    assignedEmail: normalizeEmail(row.assigned_email ?? ""),
+    assignedPassword: row.assigned_password ?? "",
+    parentalSecretCode: row.parental_secret_code ?? "",
+    mediTagId: row.medi_tag_id ?? "",
+  }
+}
+
+function mapReportRow(row: ReportRow): MedicalReport {
+  return {
+    id: row.id,
+    doctorName: row.doctor_name ?? "",
+    specialization: row.specialization ?? "",
+    clinic: row.clinic ?? "",
+    date: row.date ?? "",
+    time: row.time ?? "",
+    licenseNumber: row.license_number ?? "",
+    fileName: row.file_name ?? "",
+    notes: row.notes ?? "",
+    createdAt: Number(row.created_at ?? 0),
+  }
+}
+
+async function fetchFullProfileByEmail(email: string): Promise<{ row: ProfileRow; profile: UserProfile } | null> {
+  const key = normalizeEmail(email)
+  if (!key) return null
+
+  const { data: profileData, error: profileError } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("email", key)
+    .maybeSingle()
+
+  if (profileError) throw new Error(profileError.message)
+  if (!profileData) return null
+
+  const row = profileData as ProfileRow
+
+  const [{ data: reportsData, error: reportsError }, { data: dependentsData, error: dependentsError }] = await Promise.all([
+    supabase
+      .from("medical_reports")
+      .select("*")
+      .eq("owner_email", key)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("dependents")
+      .select("*")
+      .eq("owner_email", key),
+  ])
+
+  if (reportsError) throw new Error(reportsError.message)
+  if (dependentsError) throw new Error(dependentsError.message)
+
+  const profile = normalizeUser({
+    name: row.name ?? "",
+    dob: row.dob ?? "",
+    bloodGroup: row.blood_group ?? "",
+    gender: row.gender ?? "",
+    email: row.email,
+    password: "",
+    cardId: row.card_id ?? "",
+    allergies: asStringArray(row.allergies),
+    conditions: asStringArray(row.conditions),
+    medications: asStringArray(row.medications),
+    contacts: asContactsArray(row.contacts),
+    reports: (reportsData ?? []).map((item) => mapReportRow(item as ReportRow)),
+    dependents: (dependentsData ?? []).map((item) => mapDependentRow(item as DependentRow)),
+  })
+
+  return { row, profile }
+}
+
+async function syncDependentsToSupabase(ownerEmail: string, dependents: DependentProfile[]): Promise<void> {
+  const key = normalizeEmail(ownerEmail)
+  const { data: existingRows, error: fetchError } = await supabase
+    .from("dependents")
+    .select("id")
+    .eq("owner_email", key)
+
+  if (fetchError) throw new Error(fetchError.message)
+
+  const keepIds = new Set(dependents.map((d) => d.id))
+  const removeIds = (existingRows ?? [])
+    .map((r) => String((r as { id: string }).id))
+    .filter((id) => !keepIds.has(id))
+
+  if (removeIds.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("dependents")
+      .delete()
+      .in("id", removeIds)
+    if (deleteError) throw new Error(deleteError.message)
+  }
+
+  if (dependents.length > 0) {
+    const payload = dependents.map((d) => ({
+      id: d.id,
+      owner_email: key,
+      name: d.name,
+      dob: d.dob,
+      relationship: d.relationship,
+      blood_group: d.bloodGroup,
+      allergies: d.allergies,
+      conditions: d.conditions,
+      contacts: d.contacts,
+      assigned_email: normalizeEmail(d.assignedEmail),
+      assigned_password: d.assignedPassword,
+      parental_secret_code: d.parentalSecretCode,
+      medi_tag_id: d.mediTagId,
+    }))
+
+    const { error: upsertError } = await supabase
+      .from("dependents")
+      .upsert(payload, { onConflict: "id" })
+    if (upsertError) throw new Error(upsertError.message)
+  }
 }
 
 type AuthData = Omit<Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">, "cardId"> & { cardId?: string }
@@ -244,13 +399,28 @@ export function useStore(): StoreApi {
 
   useEffect(() => {
     let active = true
-    queueMicrotask(() => {
-      if (!active) return
-      const email = readSessionEmail()
-      const account = email ? readAccounts()[email] : undefined
-      setCurrentUser(account ? normalizeUser(account.profile) : null)
-      setReady(true)
-    })
+    ;(async () => {
+      try {
+        const email = readSessionEmail()
+        if (!email) {
+          if (active) {
+            setCurrentUser(null)
+            setReady(true)
+          }
+          return
+        }
+        const loaded = await fetchFullProfileByEmail(email)
+        if (active) {
+          setCurrentUser(loaded ? loaded.profile : null)
+          setReady(true)
+        }
+      } catch {
+        if (active) {
+          setCurrentUser(null)
+          setReady(true)
+        }
+      }
+    })()
     return () => { active = false }
   }, [])
 
@@ -259,17 +429,34 @@ export function useStore(): StoreApi {
     const password = data.password
     if (!email || !password) return { ok: false, error: "Email and password are required." }
     if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
-    if (!canUseStorage()) return { ok: false, error: "Sign-up is only available in a browser." }
-
-    const accounts = readAccounts()
-    if (accounts[email]) return { ok: false, error: "An account with this email already exists." }
-    const cardId = data.cardId?.trim() ?? ""
-    if (cardId && Object.values(accounts).some(({ profile }) => (
-      normalizeCardId(profile.cardId) === normalizeCardId(cardId) ||
-      profile.dependents.some((dependent) => normalizeCardId(dependent.mediTagId) === normalizeCardId(cardId))
-    ))) return { ok: false, error: "This Card/Tag ID is already registered." }
 
     try {
+      const { data: existingEmail, error: emailLookupError } = await supabase
+        .from("profiles")
+        .select("email")
+        .eq("email", email)
+        .maybeSingle()
+
+      if (emailLookupError) return { ok: false, error: emailLookupError.message }
+      if (existingEmail) return { ok: false, error: "An account with this email already exists." }
+
+      const cardId = data.cardId?.trim() ?? ""
+      if (cardId) {
+        const normalizedTarget = normalizeCardId(cardId)
+        const [{ data: allProfiles, error: pErr }, { data: allDependents, error: dErr }] = await Promise.all([
+          supabase.from("profiles").select("card_id"),
+          supabase.from("dependents").select("medi_tag_id"),
+        ])
+        if (pErr) return { ok: false, error: pErr.message }
+        if (dErr) return { ok: false, error: dErr.message }
+
+        const cardTaken =
+          (allProfiles ?? []).some((p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === normalizedTarget) ||
+          (allDependents ?? []).some((d) => normalizeCardId(String((d as { medi_tag_id?: string }).medi_tag_id ?? "")) === normalizedTarget)
+
+        if (cardTaken) return { ok: false, error: "This Card/Tag ID is already registered." }
+      }
+
       const credential = await hashPassword(password)
       const profile = normalizeUser({
         ...data,
@@ -283,8 +470,24 @@ export function useStore(): StoreApi {
         reports: [],
         dependents: [],
       })
-      accounts[email] = { credential, profile }
-      if (!writeAccounts(accounts)) return { ok: false, error: "Your browser could not save this account. Check local storage settings and try again." }
+
+      const { error: insertError } = await supabase.from("profiles").insert({
+        email,
+        password_salt: credential.salt,
+        password_hash: credential.hash,
+        name: profile.name,
+        dob: profile.dob,
+        blood_group: profile.bloodGroup,
+        gender: profile.gender,
+        card_id: profile.cardId,
+        allergies: [],
+        conditions: [],
+        medications: [],
+        contacts: [],
+        updated_at: Date.now(),
+      })
+
+      if (insertError) return { ok: false, error: insertError.message }
       if (!writeSession(email)) return { ok: false, error: "Your account was saved, but this browser could not persist the sign-in session." }
       setCurrentUser(profile)
       return { ok: true }
@@ -296,119 +499,260 @@ export function useStore(): StoreApi {
   const login: StoreApi["login"] = useCallback(async (email, password) => {
     const key = normalizeEmail(email)
     if (!key || !password) return { ok: false, error: "Email and password are required." }
-    const account = readAccounts()[key]
-    if (!account || !(await passwordMatches(password, account.credential))) {
-      return { ok: false, error: "Email or password is incorrect." }
+
+    try {
+      const loaded = await fetchFullProfileByEmail(key)
+      if (!loaded || !(await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
+        return { ok: false, error: "Email or password is incorrect." }
+      }
+      if (!writeSession(key)) return { ok: false, error: "This browser could not save the sign-in session." }
+      setCurrentUser(loaded.profile)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not sign in." }
     }
-    if (!writeSession(key)) return { ok: false, error: "This browser could not save the sign-in session." }
-    setCurrentUser(normalizeUser(account.profile))
-    return { ok: true }
   }, [])
 
   const loginByCard: StoreApi["loginByCard"] = useCallback(async (cardId, password) => {
     const target = normalizeCardId(cardId)
     if (!target) return { ok: false, error: "Enter your Card/Tag ID." }
-    const accounts = readAccounts()
-    const match = Object.entries(accounts).find(([, account]) => normalizeCardId(account.profile.cardId) === target)
-    if (!match || !(await passwordMatches(password, match[1].credential))) {
-      return { ok: false, error: "Card/Tag ID or password is incorrect." }
+
+    try {
+      const { data: rows, error } = await supabase.from("profiles").select("email, card_id")
+      if (error) return { ok: false, error: error.message }
+
+      const matchedRow = (rows ?? []).find(
+        (r) => normalizeCardId(String((r as { card_id?: string }).card_id ?? "")) === target
+      ) as { email: string } | undefined
+
+      if (!matchedRow) return { ok: false, error: "Card/Tag ID or password is incorrect." }
+
+      const loaded = await fetchFullProfileByEmail(matchedRow.email)
+      if (!loaded || !(await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
+        return { ok: false, error: "Card/Tag ID or password is incorrect." }
+      }
+      if (!writeSession(loaded.profile.email)) return { ok: false, error: "This browser could not save the sign-in session." }
+      setCurrentUser(loaded.profile)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not sign in with Card/Tag ID." }
     }
-    if (!writeSession(match[0])) return { ok: false, error: "This browser could not save the sign-in session." }
-    setCurrentUser(normalizeUser(match[1].profile))
-    return { ok: true }
   }, [])
 
   const getUserByCardId: StoreApi["getUserByCardId"] = useCallback(async (cardId) => {
     const target = normalizeCardId(cardId)
     if (!target) return null
-    for (const { profile } of Object.values(readAccounts())) {
-      if (normalizeCardId(profile.cardId) === target) return normalizeUser(profile)
-      const dependent = profile.dependents.find((item) => normalizeCardId(item.mediTagId) === target)
-      if (dependent) return dependentAsUser(profile, dependent)
+
+    try {
+      const { data: profilesData, error: pErr } = await supabase.from("profiles").select("email, card_id")
+      if (pErr) return null
+
+      const directMatch = (profilesData ?? []).find(
+        (p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === target
+      ) as { email: string } | undefined
+
+      if (directMatch) {
+        const loaded = await fetchFullProfileByEmail(directMatch.email)
+        return loaded ? loaded.profile : null
+      }
+
+      const { data: depsData, error: dErr } = await supabase.from("dependents").select("*")
+      if (dErr) return null
+
+      const depRow = (depsData ?? []).find(
+        (d) => normalizeCardId(String((d as DependentRow).medi_tag_id ?? "")) === target
+      ) as DependentRow | undefined
+
+      if (!depRow) return null
+      const parentLoaded = await fetchFullProfileByEmail(depRow.owner_email)
+      if (!parentLoaded) return null
+      return dependentAsUser(parentLoaded.profile, mapDependentRow(depRow))
+    } catch {
+      return null
     }
-    return null
   }, [])
 
   const getUserByEmail: StoreApi["getUserByEmail"] = useCallback(async (email) => {
     const key = normalizeEmail(email)
     if (!key) return null
-    const accounts = readAccounts()
-    if (accounts[key]) return normalizeUser(accounts[key].profile)
-    for (const { profile } of Object.values(accounts)) {
-      const dependent = profile.dependents.find((item) => item.assignedEmail === key)
-      if (dependent) return dependentAsUser(profile, dependent)
+
+    try {
+      const loaded = await fetchFullProfileByEmail(key)
+      if (loaded) return loaded.profile
+
+      const { data: depsData, error: dErr } = await supabase.from("dependents").select("*")
+      if (dErr) return null
+
+      const depRow = (depsData ?? []).find(
+        (d) => normalizeEmail(String((d as DependentRow).assigned_email ?? "")) === key
+      ) as DependentRow | undefined
+
+      if (!depRow) return null
+      const parentLoaded = await fetchFullProfileByEmail(depRow.owner_email)
+      if (!parentLoaded) return null
+      return dependentAsUser(parentLoaded.profile, mapDependentRow(depRow))
+    } catch {
+      return null
     }
-    return null
   }, [])
 
   const findPatientByCardId: StoreApi["findPatientByCardId"] = useCallback(async (cardId) => {
     const target = normalizeCardId(cardId)
     if (!target) return null
-    for (const { profile } of Object.values(readAccounts())) {
-      if (normalizeCardId(profile.cardId) === target) return { kind: "user", cardId: profile.cardId, name: profile.name }
-      const dependent = profile.dependents.find((item) => normalizeCardId(item.mediTagId) === target)
-      if (dependent) return { kind: "dependent", cardId: dependent.mediTagId, name: dependent.name }
+
+    try {
+      const { data: profilesData } = await supabase.from("profiles").select("card_id, name")
+      const userMatch = (profilesData ?? []).find(
+        (p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === target
+      ) as { card_id?: string; name?: string } | undefined
+
+      if (userMatch) {
+        return { kind: "user", cardId: userMatch.card_id ?? "", name: userMatch.name ?? "" }
+      }
+
+      const { data: depsData } = await supabase.from("dependents").select("medi_tag_id, name")
+      const depMatch = (depsData ?? []).find(
+        (d) => normalizeCardId(String((d as { medi_tag_id?: string }).medi_tag_id ?? "")) === target
+      ) as { medi_tag_id?: string; name?: string } | undefined
+
+      if (depMatch) {
+        return { kind: "dependent", cardId: depMatch.medi_tag_id ?? "", name: depMatch.name ?? "" }
+      }
+
+      return null
+    } catch {
+      return null
     }
-    return null
   }, [])
 
-  const updateStoredProfile = useCallback((update: (profile: UserProfile) => UserProfile) => {
+  const updateStoredProfile = useCallback(async (update: (profile: UserProfile) => UserProfile) => {
     const email = readSessionEmail()
     if (!email) throw new Error("Sign in to update your profile.")
-    const accounts = readAccounts()
-    const account = accounts[email]
-    if (!account) throw new Error("Your local profile could not be found.")
-    const profile = normalizeUser(update(normalizeUser(account.profile)))
-    accounts[email] = { ...account, profile }
-    if (!writeAccounts(accounts)) throw new Error("Your browser could not save this change. Check local storage settings and try again.")
-    setCurrentUser(profile)
-    return profile
+
+    const loaded = await fetchFullProfileByEmail(email)
+    if (!loaded) throw new Error("Your profile could not be found.")
+
+    const updated = normalizeUser(update(loaded.profile))
+
+    const { error: profileUpdateError } = await supabase
+      .from("profiles")
+      .update({
+        name: updated.name,
+        dob: updated.dob,
+        blood_group: updated.bloodGroup,
+        gender: updated.gender,
+        card_id: updated.cardId,
+        allergies: updated.allergies,
+        conditions: updated.conditions,
+        medications: updated.medications,
+        contacts: updated.contacts,
+        updated_at: Date.now(),
+      })
+      .eq("email", email)
+
+    if (profileUpdateError) throw new Error(profileUpdateError.message)
+
+    await syncDependentsToSupabase(email, updated.dependents)
+
+    const refreshed = await fetchFullProfileByEmail(email)
+    setCurrentUser(refreshed ? refreshed.profile : updated)
   }, [])
 
   const addReportToCard: StoreApi["addReportToCard"] = useCallback(async (cardId, report, practitioner) => {
     if (!practitioner) return { ok: false, error: "Practitioner identity is required." }
     const target = normalizeCardId(cardId)
-    const accounts = readAccounts()
-    const match = Object.entries(accounts).find(([, account]) => normalizeCardId(account.profile.cardId) === target)
-    if (!match) return { ok: false, error: "No registered account was found for this Card/Tag ID." }
-    const [email, account] = match
-    const updated = normalizeUser({
-      ...account.profile,
-      reports: [{ ...report, id: uid(), createdAt: Date.now() }, ...account.profile.reports],
-    })
-    accounts[email] = { ...account, profile: updated }
-    if (!writeAccounts(accounts)) return { ok: false, error: "Your browser could not save the report." }
-    if (readSessionEmail() === email) setCurrentUser(updated)
-    return { ok: true }
+
+    try {
+      const { data: profilesData, error: pErr } = await supabase.from("profiles").select("email, card_id")
+      if (pErr) return { ok: false, error: pErr.message }
+
+      const matched = (profilesData ?? []).find(
+        (p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === target
+      ) as { email: string } | undefined
+
+      if (!matched) return { ok: false, error: "No registered account was found for this Card/Tag ID." }
+
+      const ownerEmail = normalizeEmail(matched.email)
+      const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
+
+      const { error: insertError } = await supabase.from("medical_reports").insert({
+        id: newReport.id,
+        owner_email: ownerEmail,
+        doctor_name: newReport.doctorName,
+        specialization: newReport.specialization,
+        clinic: newReport.clinic,
+        date: newReport.date,
+        time: newReport.time,
+        license_number: newReport.licenseNumber,
+        file_name: newReport.fileName,
+        notes: newReport.notes,
+        created_at: newReport.createdAt,
+      })
+
+      if (insertError) return { ok: false, error: insertError.message }
+
+      if (readSessionEmail() === ownerEmail) {
+        const refreshed = await fetchFullProfileByEmail(ownerEmail)
+        if (refreshed) setCurrentUser(refreshed.profile)
+      }
+
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not save the report." }
+    }
   }, [])
 
   const verifyCredentials: StoreApi["verifyCredentials"] = useCallback(async (email, password) => {
     const key = normalizeEmail(email)
     if (!key || !password) return { ok: false, error: "Enter the child's email and password." }
-    const accounts = readAccounts()
-    const account = accounts[key]
-    if (account && await passwordMatches(password, account.credential)) return { ok: true }
-    const dependent = Object.values(accounts).some(({ profile }) => profile.dependents.some((item) => (
-      item.assignedEmail === key && item.assignedPassword === password
-    )))
-    return dependent
-      ? { ok: true }
-      : { ok: false, error: "No local account matches that email and password." }
+
+    try {
+      const loaded = await fetchFullProfileByEmail(key)
+      if (loaded && (await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
+        return { ok: true }
+      }
+
+      const { data: depsData, error } = await supabase.from("dependents").select("assigned_email, assigned_password")
+      if (error) return { ok: false, error: error.message }
+
+      const matchedDep = (depsData ?? []).some((d) => {
+        const row = d as { assigned_email?: string; assigned_password?: string }
+        return normalizeEmail(row.assigned_email ?? "") === key && (row.assigned_password ?? "") === password
+      })
+
+      return matchedDep
+        ? { ok: true }
+        : { ok: false, error: "No account matches that email and password." }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not verify credentials." }
+    }
   }, [])
 
   const verifyResetIdentity: StoreApi["verifyResetIdentity"] = useCallback(async (email, cardId) => {
     const key = normalizeEmail(email)
     const target = normalizeCardId(cardId)
     if (!key || !target) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
-    const accounts = readAccounts()
-    const account = accounts[key]
-    if (account && normalizeCardId(account.profile.cardId) === target) return { ok: true }
-    const dependent = Object.values(accounts).some(({ profile }) => profile.dependents.some((item) => (
-      item.assignedEmail === key && normalizeCardId(item.mediTagId) === target
-    )))
-    return dependent
-      ? { ok: true }
-      : { ok: false, error: "Email ID and Card/Tag ID do not match a local account." }
+
+    try {
+      const loaded = await fetchFullProfileByEmail(key)
+      if (loaded && normalizeCardId(loaded.profile.cardId) === target) {
+        return { ok: true }
+      }
+
+      const { data: depsData, error } = await supabase.from("dependents").select("assigned_email, medi_tag_id")
+      if (error) return { ok: false, error: error.message }
+
+      const matchedDep = (depsData ?? []).some((d) => {
+        const row = d as { assigned_email?: string; medi_tag_id?: string }
+        return normalizeEmail(row.assigned_email ?? "") === key && normalizeCardId(row.medi_tag_id ?? "") === target
+      })
+
+      return matchedDep
+        ? { ok: true }
+        : { ok: false, error: "Email ID and Card/Tag ID do not match an account." }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Could not verify identity." }
+    }
   }, [])
 
   const resetPassword: StoreApi["resetPassword"] = useCallback(async (email, cardId, password) => {
@@ -418,25 +762,43 @@ export function useStore(): StoreApi {
     if (!identity.ok) return identity
 
     try {
-      const accounts = readAccounts()
-      const account = accounts[key]
-      if (account) {
-        accounts[key] = { ...account, credential: await hashPassword(password) }
-      } else {
-        let updatedDependent = false
-        for (const [ownerEmail, owner] of Object.entries(accounts)) {
-          const dependents = owner.profile.dependents.map((dependent) => {
-            if (dependent.assignedEmail !== key || normalizeCardId(dependent.mediTagId) !== normalizeCardId(cardId)) return dependent
-            updatedDependent = true
-            return { ...dependent, assignedPassword: password }
+      const loaded = await fetchFullProfileByEmail(key)
+      if (loaded) {
+        const credential = await hashPassword(password)
+        const { error } = await supabase
+          .from("profiles")
+          .update({
+            password_salt: credential.salt,
+            password_hash: credential.hash,
+            updated_at: Date.now(),
           })
-          if (updatedDependent) accounts[ownerEmail] = { ...owner, profile: { ...owner.profile, dependents } }
-        }
-        if (!updatedDependent) return { ok: false, error: "The local account could not be found." }
+          .eq("email", key)
+        if (error) return { ok: false, error: error.message }
+        return { ok: true }
       }
-      return writeAccounts(accounts)
-        ? { ok: true }
-        : { ok: false, error: "Your browser could not save the new password." }
+
+      const { data: depsData, error: dErr } = await supabase
+        .from("dependents")
+        .select("id, assigned_email, medi_tag_id")
+      if (dErr) return { ok: false, error: dErr.message }
+
+      const targetCard = normalizeCardId(cardId)
+      const matchingDeps = (depsData ?? []).filter((d) => {
+        const row = d as { id: string; assigned_email?: string; medi_tag_id?: string }
+        return normalizeEmail(row.assigned_email ?? "") === key && normalizeCardId(row.medi_tag_id ?? "") === targetCard
+      })
+
+      if (matchingDeps.length === 0) return { ok: false, error: "The account could not be found." }
+
+      for (const dep of matchingDeps) {
+        const { error: uErr } = await supabase
+          .from("dependents")
+          .update({ assigned_password: password })
+          .eq("id", (dep as { id: string }).id)
+        if (uErr) return { ok: false, error: uErr.message }
+      }
+
+      return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Could not reset the password." }
     }
@@ -444,11 +806,20 @@ export function useStore(): StoreApi {
 
   const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback(async (email) => {
     const key = normalizeEmail(email)
-    for (const { profile } of Object.values(readAccounts())) {
-      const dependent = profile.dependents.find((item) => item.assignedEmail === key)
-      if (dependent) return { ...dependent }
+    if (!key) return null
+
+    try {
+      const { data: depsData, error } = await supabase.from("dependents").select("*")
+      if (error) return null
+
+      const depRow = (depsData ?? []).find(
+        (d) => normalizeEmail(String((d as DependentRow).assigned_email ?? "")) === key
+      ) as DependentRow | undefined
+
+      return depRow ? mapDependentRow(depRow) : null
+    } catch {
+      return null
     }
-    return null
   }, [])
 
   const logout: StoreApi["logout"] = useCallback(async () => {
@@ -458,30 +829,41 @@ export function useStore(): StoreApi {
 
   const resetAll: StoreApi["resetAll"] = useCallback(() => {
     removeSession()
-    if (canUseStorage()) {
-      try {
-        window.localStorage.removeItem(ACCOUNTS_KEY)
-      } catch {
-        // In-memory state is still cleared if storage is unavailable.
-      }
-    }
     setCurrentUser(null)
     setReady(true)
   }, [])
 
   const addReport: StoreApi["addReport"] = useCallback(async (report) => {
-    updateStoredProfile((profile) => ({
-      ...profile,
-      reports: [{ ...report, id: uid(), createdAt: Date.now() }, ...profile.reports],
-    }))
-  }, [updateStoredProfile])
+    const email = readSessionEmail()
+    if (!email) throw new Error("Sign in to add a report.")
+
+    const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
+    const { error } = await supabase.from("medical_reports").insert({
+      id: newReport.id,
+      owner_email: email,
+      doctor_name: newReport.doctorName,
+      specialization: newReport.specialization,
+      clinic: newReport.clinic,
+      date: newReport.date,
+      time: newReport.time,
+      license_number: newReport.licenseNumber,
+      file_name: newReport.fileName,
+      notes: newReport.notes,
+      created_at: newReport.createdAt,
+    })
+
+    if (error) throw new Error(error.message)
+
+    const refreshed = await fetchFullProfileByEmail(email)
+    if (refreshed) setCurrentUser(refreshed.profile)
+  }, [])
 
   const updateProfile: StoreApi["updateProfile"] = useCallback(async (partial) => {
-    updateStoredProfile((profile) => ({ ...profile, ...partial, email: profile.email, password: "" }))
+    await updateStoredProfile((profile) => ({ ...profile, ...partial, email: profile.email, password: "" }))
   }, [updateStoredProfile])
 
   const addDependent: StoreApi["addDependent"] = useCallback(async (data) => {
-    updateStoredProfile((profile) => ({
+    await updateStoredProfile((profile) => ({
       ...profile,
       dependents: [...profile.dependents, {
         ...data,
@@ -493,7 +875,7 @@ export function useStore(): StoreApi {
   }, [updateStoredProfile])
 
   const updateDependent: StoreApi["updateDependent"] = useCallback(async (id, partial) => {
-    updateStoredProfile((profile) => ({
+    await updateStoredProfile((profile) => ({
       ...profile,
       dependents: profile.dependents.map((dependent) => dependent.id === id
         ? { ...dependent, ...partial, id, assignedEmail: normalizeEmail(partial.assignedEmail ?? dependent.assignedEmail) }
@@ -502,7 +884,10 @@ export function useStore(): StoreApi {
   }, [updateStoredProfile])
 
   const removeDependent: StoreApi["removeDependent"] = useCallback(async (id) => {
-    updateStoredProfile((profile) => ({ ...profile, dependents: profile.dependents.filter((dependent) => dependent.id !== id) }))
+    await updateStoredProfile((profile) => ({
+      ...profile,
+      dependents: profile.dependents.filter((dependent) => dependent.id !== id),
+    }))
   }, [updateStoredProfile])
 
   return {
