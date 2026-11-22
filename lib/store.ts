@@ -382,8 +382,7 @@ export type StoreApi = {
   /** Attaches a clinical report to the profile identified by a Card/Tag ID. */
   addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">, practitioner?: Practitioner) => Promise<Result>
   verifyCredentials: (email: string, password: string) => Promise<Result>
-  verifyResetIdentity: (email: string, cardId: string) => Promise<Result>
-  resetPassword: (email: string, cardId: string, password: string) => Promise<Result>
+  requestPasswordReset: (email: string) => Promise<Result>
   getDependentByEmail: (email: string) => Promise<DependentProfile | null>
   logout: () => Promise<void>
   resetAll: () => void
@@ -729,81 +728,22 @@ export function useStore(): StoreApi {
     }
   }, [])
 
-  const verifyResetIdentity: StoreApi["verifyResetIdentity"] = useCallback(async (email, cardId) => {
+  const requestPasswordReset: StoreApi["requestPasswordReset"] = useCallback(async (email) => {
     const key = normalizeEmail(email)
-    const target = normalizeCardId(cardId)
-    if (!key || !target) return { ok: false, error: "Enter both your Email ID and Card/Tag ID." }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) {
+      return { ok: false, error: "Enter a valid email address." }
+    }
 
     try {
-      const loaded = await fetchFullProfileByEmail(key)
-      if (loaded && normalizeCardId(loaded.profile.cardId) === target) {
-        return { ok: true }
-      }
-
-      const { data: depsData, error } = await supabase.from("dependents").select("assigned_email, medi_tag_id")
-      if (error) return { ok: false, error: error.message }
-
-      const matchedDep = (depsData ?? []).some((d) => {
-        const row = d as { assigned_email?: string; medi_tag_id?: string }
-        return normalizeEmail(row.assigned_email ?? "") === key && normalizeCardId(row.medi_tag_id ?? "") === target
+      const { error } = await supabase.auth.resetPasswordForEmail(key, {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
       })
-
-      return matchedDep
-        ? { ok: true }
-        : { ok: false, error: "Email ID and Card/Tag ID do not match an account." }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Could not verify identity." }
+      if (error) return { ok: false, error: "If an account exists for this email, recovery instructions will be sent." }
+      return { ok: true }
+    } catch {
+      return { ok: false, error: "If an account exists for this email, recovery instructions will be sent." }
     }
   }, [])
-
-  const resetPassword: StoreApi["resetPassword"] = useCallback(async (email, cardId, password) => {
-    const key = normalizeEmail(email)
-    if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
-    const identity = await verifyResetIdentity(key, cardId)
-    if (!identity.ok) return identity
-
-    try {
-      const loaded = await fetchFullProfileByEmail(key)
-      if (loaded) {
-        const credential = await hashPassword(password)
-        const { error } = await supabase
-          .from("profiles")
-          .update({
-            password_salt: credential.salt,
-            password_hash: credential.hash,
-            updated_at: Date.now(),
-          })
-          .eq("email", key)
-        if (error) return { ok: false, error: error.message }
-        return { ok: true }
-      }
-
-      const { data: depsData, error: dErr } = await supabase
-        .from("dependents")
-        .select("id, assigned_email, medi_tag_id")
-      if (dErr) return { ok: false, error: dErr.message }
-
-      const targetCard = normalizeCardId(cardId)
-      const matchingDeps = (depsData ?? []).filter((d) => {
-        const row = d as { id: string; assigned_email?: string; medi_tag_id?: string }
-        return normalizeEmail(row.assigned_email ?? "") === key && normalizeCardId(row.medi_tag_id ?? "") === targetCard
-      })
-
-      if (matchingDeps.length === 0) return { ok: false, error: "The account could not be found." }
-
-      for (const dep of matchingDeps) {
-        const { error: uErr } = await supabase
-          .from("dependents")
-          .update({ assigned_password: password })
-          .eq("id", (dep as { id: string }).id)
-        if (uErr) return { ok: false, error: uErr.message }
-      }
-
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Could not reset the password." }
-    }
-  }, [verifyResetIdentity])
 
   const getDependentByEmail: StoreApi["getDependentByEmail"] = useCallback(async (email) => {
     const key = normalizeEmail(email)
@@ -904,8 +844,7 @@ export function useStore(): StoreApi {
     findPatientByCardId,
     addReportToCard,
     verifyCredentials,
-    verifyResetIdentity,
-    resetPassword,
+    requestPasswordReset,
     getDependentByEmail,
     logout,
     resetAll,
@@ -957,16 +896,46 @@ export function validateParentalCode(code: string): { ok: boolean; error?: strin
   return { ok: true }
 }
 
-/** Simulated medical-credential verification engine. */
+export const PILOT_CLINICS = [
+  "Der-med Clinic",
+  "Apollo Hospitals",
+  "Seawoods Hospital",
+  "Terna Speciality Hospital",
+  "D Y Patil Hospital",
+  "Fortis Hiranandani Hospital",
+  "MGM Hospital",
+] as const
+
+export function isPilotClinic(value: string): boolean {
+  const normalized = value.trim().toLocaleLowerCase().replace(/\s+/g, " ")
+  return PILOT_CLINICS.some((clinic) => clinic.toLocaleLowerCase() === normalized)
+}
+
+export function recognizeOfficialMmcKydQr(value: string): { official: boolean; url?: string; registrationNumber?: string } {
+  try {
+    const url = new URL(value.trim())
+    if (url.protocol !== "https:" || !["kyd.co.in", "www.kyd.co.in"].includes(url.hostname.toLowerCase())) {
+      return { official: false }
+    }
+    const registrationNumber = ["registrationNumber", "registration_no", "regNo", "mmcRegNo", "registration"]
+      .map((key) => url.searchParams.get(key))
+      .find((candidate): candidate is string => Boolean(candidate?.trim()))
+    return { official: true, url: url.toString(), registrationNumber }
+  } catch {
+    return { official: false }
+  }
+}
+
+/** Pilot fallback check only; it does not replace live MMC/KYD credential verification. */
 export function validateMedicalLicense(input: { doctorName: string; registrationNumber: string; institution: string }): { ok: boolean; error?: string } {
-  const denied = { ok: false, error: "⛔ Approval Denied: Unverified or Invalid Medical License Credentials." }
+  const denied = { ok: false, error: "Approval denied: check the practitioner details and pilot clinic." }
   const name = input.doctorName.trim()
   const reg = input.registrationNumber.trim()
-  const inst = input.institution.trim()
   if (!name || name.replace(/[^A-Za-z]/g, "").length < 3) return denied
-  if (!/^[A-Za-z]{0,6}[-/ ]?\d{4,}$/.test(reg)) return denied
-  const registry = /(nmc|mci|smc|medical council|state medical|council|hospital|clinic|medical|health)/i
-  if (!registry.test(inst)) return denied
+  if (!/^[A-Za-z0-9]{1,8}[-/ ]?\d{4,}$/.test(reg)) return denied
+  if (!isPilotClinic(input.institution)) {
+    return { ok: false, error: "This clinic is not on the Navi Mumbai / Seawoods pilot allowlist." }
+  }
   return { ok: true }
 }
 
