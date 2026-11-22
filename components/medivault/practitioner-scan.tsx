@@ -18,9 +18,17 @@ import {
   Tag,
   Search,
   UserCheck,
+  QrCode,
 } from "lucide-react"
 import { ModalShell } from "./shared"
-import { validateMedicalLicense, type StoreApi } from "@/lib/store"
+import { QrCameraScanner } from "./qr-camera-scanner"
+import {
+  PILOT_CLINICS,
+  getPilotRegistrationId,
+  recognizeOfficialMmcKydQr,
+  validateMedicalLicense,
+  type StoreApi,
+} from "@/lib/store"
 
 export type PractitionerSession = {
   doctorName: string
@@ -62,6 +70,9 @@ export function PractitionerScan({
   const [doctorName, setDoctorName] = useState("")
   const [registrationNumber, setRegistrationNumber] = useState("")
   const [institution, setInstitution] = useState("")
+  const [scannerOpen, setScannerOpen] = useState(false)
+  const [officialQrUrl, setOfficialQrUrl] = useState<string | null>(null)
+  const [officialQrConfirmed, setOfficialQrConfirmed] = useState(false)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -134,31 +145,58 @@ export function PractitionerScan({
 
   function verifyAndEnter() {
     setError(null)
-    const result = validateMedicalLicense({ doctorName, registrationNumber, institution })
-    if (!result.ok) {
-      setError(result.error ?? "Approval denied.")
-      return
+    if (officialQrUrl) {
+      if (!officialQrConfirmed) {
+        setError("Open the official MMC/KYD record and confirm the active registration before continuing.")
+        return
+      }
+      if (!doctorName.trim() || !registrationNumber.trim()) {
+        setError("Enter the practitioner name and registration ID shown on the official record.")
+        return
+      }
+    } else {
+      const result = validateMedicalLicense({ doctorName, registrationNumber, institution })
+      if (!result.ok) {
+        setError(result.error ?? "Approval denied.")
+        return
+      }
     }
     onApproved(
       {
         doctorName: doctorName.trim(),
         registrationNumber: registrationNumber.trim(),
-        institution: institution.trim(),
+        institution: officialQrUrl ? "Maharashtra Medical Council" : institution.trim(),
       },
       resolvedCardId,
     )
+  }
+
+  function handlePractitionerQr(value: string) {
+    const recognition = recognizeOfficialMmcKydQr(value)
+    if (!recognition.official || !recognition.url) {
+      setError("This QR is not from an official KYD or Maharashtra Medical Council domain.")
+      setOfficialQrUrl(null)
+      setOfficialQrConfirmed(false)
+      return
+    }
+    setOfficialQrUrl(recognition.url)
+    setRegistrationNumber(recognition.registrationNumber ?? "")
+    setOfficialQrConfirmed(false)
+    setError(null)
+    setScannerOpen(false)
   }
 
   const inputClass =
     "w-full rounded-xl border border-border bg-input py-2.5 pl-10 pr-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
 
   return (
+    <>
     <ModalShell
       title="Practitioner Verification"
       subtitle={
         step === "patient"
-          ? "Step 1 of 2 \u00b7 Find the patient"
-          : "Step 2 of 2 \u00b7 Scan your medical license"
+          ? "Step 1 of 2 · Find the patient"
+          : "Step 2 of 2 · Verify your MMC registration"
       }
       headerAccent
       onClose={() => {
@@ -248,6 +286,97 @@ export function PractitionerScan({
               Hospital Credentials. We verify the registration number and institution before granting
               clinical edit access.
             </p>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
+            <div>
+              <h3 className="text-sm font-bold text-foreground">Practitioner / MMC registration ID</h3>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                Enter your ID and clinic, or scan an official KYD / Maharashtra Medical Council QR code.
+              </p>
+            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-muted-foreground">Practitioner name</span>
+              <input
+                className={inputClass}
+                autoComplete="name"
+                placeholder="Dr. Jane Smith"
+                value={doctorName}
+                onChange={(event) => {
+                  setDoctorName(event.target.value)
+                  setError(null)
+                }}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-muted-foreground">MMC registration ID</span>
+              <div className="flex gap-2">
+                <input
+                  className={inputClass}
+                  placeholder="e.g. 2024/06/18402"
+                  value={registrationNumber}
+                  onChange={(event) => {
+                    setRegistrationNumber(event.target.value.trim())
+                    setOfficialQrUrl(null)
+                    setOfficialQrConfirmed(false)
+                    setError(null)
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setScannerOpen(true)}
+                  aria-label="Scan official practitioner QR code"
+                  className="grid shrink-0 place-items-center rounded-xl bg-primary px-3 text-primary-foreground transition hover:brightness-110"
+                >
+                  <QrCode className="size-5" />
+                </button>
+              </div>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold text-muted-foreground">Pilot clinic / hospital</span>
+              <select
+                className={`${inputClass} appearance-none`}
+                value={institution}
+                onChange={(event) => {
+                  setInstitution(event.target.value)
+                  setOfficialQrUrl(null)
+                  setOfficialQrConfirmed(false)
+                  setError(null)
+                }}
+              >
+                <option value="">Select a Navi Mumbai / Seawoods clinic</option>
+                {PILOT_CLINICS.map((clinic) => <option key={clinic} value={clinic}>{clinic}</option>)}
+              </select>
+            </label>
+            {officialQrUrl ? (
+              <div className="space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3">
+                <a href={officialQrUrl} target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-primary underline underline-offset-2">
+                  Open official MMC/KYD record
+                </a>
+                <label className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={officialQrConfirmed}
+                    onChange={(event) => setOfficialQrConfirmed(event.target.checked)}
+                    className="mt-0.5 accent-primary"
+                  />
+                  I checked the official record and confirmed the practitioner name and active registration.
+                </label>
+              </div>
+            ) : (
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {institution ? `Pilot reference ID for ${institution}: ${getPilotRegistrationId(institution) ?? "not listed"}. ` : "Select a clinic to view its pilot reference ID. "}
+                This fallback is not a live council lookup.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={verifyAndEnter}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-3 text-sm font-bold text-accent-foreground shadow-lg shadow-accent/25 transition hover:brightness-110"
+            >
+              <BadgeCheck className="size-4" />
+              Verify registration &amp; continue
+            </button>
           </div>
 
           {cameraOn ? (
@@ -430,6 +559,13 @@ export function PractitionerScan({
         </div>
       )}
     </ModalShell>
+    {scannerOpen && (
+      <QrCameraScanner
+        onClose={() => setScannerOpen(false)}
+        onDetected={handlePractitionerQr}
+      />
+    )}
+    </>
   )
 }
 

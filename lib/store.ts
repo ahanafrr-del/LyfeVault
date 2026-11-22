@@ -385,7 +385,6 @@ export type StoreApi = {
   requestPasswordReset: (email: string) => Promise<Result>
   getDependentByEmail: (email: string) => Promise<DependentProfile | null>
   logout: () => Promise<void>
-  resetAll: () => void
   addReport: (report: Omit<MedicalReport, "id" | "createdAt">) => Promise<void>
   updateProfile: (partial: Partial<UserProfile>) => Promise<void>
   addDependent: (data: Omit<DependentProfile, "id" | "mediTagId">) => Promise<void>
@@ -768,12 +767,6 @@ export function useStore(): StoreApi {
     setCurrentUser(null)
   }, [])
 
-  const resetAll: StoreApi["resetAll"] = useCallback(() => {
-    removeSession()
-    setCurrentUser(null)
-    setReady(true)
-  }, [])
-
   const addReport: StoreApi["addReport"] = useCallback(async (report) => {
     const email = readSessionEmail()
     if (!email) throw new Error("Sign in to add a report.")
@@ -845,10 +838,9 @@ export function useStore(): StoreApi {
     addReportToCard,
     verifyCredentials,
     requestPasswordReset,
-    getDependentByEmail,
-    logout,
-    resetAll,
-    addReport,
+  getDependentByEmail,
+  logout,
+  addReport,
     updateProfile,
     addDependent,
     updateDependent,
@@ -896,25 +888,34 @@ export function validateParentalCode(code: string): { ok: boolean; error?: strin
   return { ok: true }
 }
 
-export const PILOT_CLINICS = [
-  "Der-med Clinic",
-  "Apollo Hospitals",
-  "Seawoods Hospital",
-  "Terna Speciality Hospital",
-  "D Y Patil Hospital",
-  "Fortis Hiranandani Hospital",
-  "MGM Hospital",
-] as const
+export const PILOT_CLINIC_REGISTRATIONS = {
+  "Der-med Clinic": "2024/06/18402",
+  "Apollo Hospitals": "2023/11/54910",
+  "Seawoods Hospital": "2024/02/31208",
+  "Terna Speciality Hospital": "2023/09/67421",
+  "D Y Patil Hospital": "2024/04/89105",
+  "Fortis Hiranandani Hospital": "2023/07/42019",
+  "MGM Hospital": "2024/01/73564",
+} as const
+
+export const PILOT_CLINICS = Object.keys(PILOT_CLINIC_REGISTRATIONS) as (keyof typeof PILOT_CLINIC_REGISTRATIONS)[]
+
+export function getPilotRegistrationId(value: string): string | null {
+  const normalized = value.trim().toLocaleLowerCase().replace(/\s+/g, " ")
+  const clinic = PILOT_CLINICS.find((name) => name.toLocaleLowerCase() === normalized)
+  return clinic ? PILOT_CLINIC_REGISTRATIONS[clinic] : null
+}
 
 export function isPilotClinic(value: string): boolean {
-  const normalized = value.trim().toLocaleLowerCase().replace(/\s+/g, " ")
-  return PILOT_CLINICS.some((clinic) => clinic.toLocaleLowerCase() === normalized)
+  return getPilotRegistrationId(value) !== null
 }
 
 export function recognizeOfficialMmcKydQr(value: string): { official: boolean; url?: string; registrationNumber?: string } {
   try {
     const url = new URL(value.trim())
-    if (url.protocol !== "https:" || !["kyd.co.in", "www.kyd.co.in"].includes(url.hostname.toLowerCase())) {
+    const hostname = url.hostname.toLowerCase()
+    const isOfficialHost = hostname === "kyd.co.in" || hostname.endsWith(".kyd.co.in") || hostname === "maharashtramedicalcouncil.org.in" || hostname.endsWith(".maharashtramedicalcouncil.org.in")
+    if (url.protocol !== "https:" || !isOfficialHost) {
       return { official: false }
     }
     const registrationNumber = ["registrationNumber", "registration_no", "regNo", "mmcRegNo", "registration"]
@@ -932,9 +933,12 @@ export function validateMedicalLicense(input: { doctorName: string; registration
   const name = input.doctorName.trim()
   const reg = input.registrationNumber.trim()
   if (!name || name.replace(/[^A-Za-z]/g, "").length < 3) return denied
-  if (!/^[A-Za-z0-9]{1,8}[-/ ]?\d{4,}$/.test(reg)) return denied
   if (!isPilotClinic(input.institution)) {
     return { ok: false, error: "This clinic is not on the Navi Mumbai / Seawoods pilot allowlist." }
+  }
+  const pilotClinic = PILOT_CLINICS.find((clinic) => clinic.toLocaleLowerCase() === input.institution.trim().replace(/\s+/g, " ").toLocaleLowerCase())
+  if (!pilotClinic || reg !== PILOT_CLINIC_REGISTRATIONS[pilotClinic]) {
+    return { ok: false, error: "The registration ID does not match this clinic's pilot allowlist record." }
   }
   return { ok: true }
 }

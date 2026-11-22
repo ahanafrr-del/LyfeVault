@@ -89,7 +89,7 @@ export function QrCameraScanner({
   return (
     <div className="fixed inset-0 z-[60]">
       <ModalShell
-        title="Scan prescription QR code"
+        title="Scan QR code"
         subtitle="Point your camera at a clear QR code"
         onClose={onClose}
         headerAccent

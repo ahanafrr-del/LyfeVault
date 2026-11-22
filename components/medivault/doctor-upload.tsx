@@ -11,7 +11,7 @@ import {
 import { ModalShell } from "./shared"
 import { QrCameraScanner } from "./qr-camera-scanner"
 import {
-  isPilotClinic,
+  getPilotRegistrationId,
   recognizeOfficialMmcKydQr,
   SPECIALIZATIONS,
   validateMedicalLicense,
@@ -255,7 +255,9 @@ export function DoctorUpload({
                 Check pilot clinic and license format
               </button>
               <p className="text-[11px] text-muted-foreground">
-                {isPilotClinic(clinic) ? "Clinic is on the Seawoods pilot allowlist." : "Typed fallback is limited to the seven Navi Mumbai / Seawoods pilot clinics."}
+                {getPilotRegistrationId(clinic)
+                  ? `Pilot reference ID for ${clinic}: ${getPilotRegistrationId(clinic)}. This is not a live council lookup.`
+                  : "Typed fallback is limited to the seven Navi Mumbai / Seawoods pilot clinics."}
               </p>
             </div>
           ) : null}

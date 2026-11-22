@@ -41,15 +41,6 @@ export default function Page() {
   const minor = isChildProfile(user)
   const visibleStage = store.ready && user && stage === "splash" ? "app" : stage
 
-  function handleReset() {
-    store.resetAll()
-    setStage("splash")
-    setTab("home")
-    setSubScreen(null)
-    setOverlay(null)
-    setMinorUnlocked(false)
-  }
-
   function handleDashboardAction(action: DashboardAction) {
     switch (action) {
       case "dependents":
@@ -94,7 +85,7 @@ export default function Page() {
 
   function renderPhoneContent() {
     if (visibleStage === "splash") {
-      return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
+      return <SplashScreen onEnter={() => setStage("auth")} />
     }
 
     if (visibleStage === "auth") {
@@ -126,7 +117,7 @@ export default function Page() {
 
     if (visibleStage === "segment") {
       // Screen 1.5 — confirm minor vs adult segmentation before entering the app.
-      if (!user) return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
+      if (!user) return <SplashScreen onEnter={() => setStage("auth")} />
       return <SegmentationScreen user={user} onProceed={() => setStage("app")} />
     }
 
