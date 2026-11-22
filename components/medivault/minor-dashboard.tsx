@@ -73,13 +73,14 @@ export function MinorDashboard({
   // Parental override state. The 4-digit code lives on the dependent record that a
   // guardian created when linking this child's login email.
   const [linkedDependent, setLinkedDependent] = useState<Awaited<ReturnType<StoreApi["getDependentByEmail"]>>>(null)
+  const getDependentByEmail = store.getDependentByEmail
   useEffect(() => {
     let active = true
-    void store.getDependentByEmail(user.email).then((dependent) => {
+    void getDependentByEmail(user.email).then((dependent) => {
       if (active) setLinkedDependent(dependent)
     })
     return () => { active = false }
-  }, [store.getDependentByEmail, user.email])
+  }, [getDependentByEmail, user.email])
   const [pinOpen, setPinOpen] = useState(false)
   const [pin, setPin] = useState("")
   const [pinError, setPinError] = useState<string | null>(null)

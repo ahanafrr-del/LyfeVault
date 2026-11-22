@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Bell } from "lucide-react"
 import { useStore, isChildProfile, type UserProfile } from "@/lib/store"
 import { SplashScreen } from "@/components/medivault/splash-screen"
@@ -13,8 +13,6 @@ import { TabBar, type MainTab } from "@/components/medivault/tab-bar"
 import { Timeline } from "@/components/medivault/timeline"
 import { Departments } from "@/components/medivault/departments"
 import { DependentsDirectory } from "@/components/medivault/dependents-directory"
-import { AiChatbot } from "@/components/medivault/ai-chatbot"
-import { AiSummary } from "@/components/medivault/ai-summary"
 import { DoctorUpload } from "@/components/medivault/doctor-upload"
 import { ProfileScreen } from "@/components/medivault/profile-screen"
 import { ClinicalMode } from "@/components/medivault/clinical-mode"
@@ -41,10 +39,7 @@ export default function Page() {
 
   const user = store.currentUser
   const minor = isChildProfile(user)
-
-  useEffect(() => {
-    if (store.ready && user && stage === "splash") setStage("app")
-  }, [store.ready, user, stage])
+  const visibleStage = store.ready && user && stage === "splash" ? "app" : stage
 
   function handleReset() {
     store.resetAll()
@@ -98,11 +93,11 @@ export default function Page() {
   }
 
   function renderPhoneContent() {
-    if (stage === "splash") {
+    if (visibleStage === "splash") {
       return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
     }
 
-    if (stage === "auth") {
+    if (visibleStage === "auth") {
       return (
         <AuthScreen
           store={store}
@@ -116,7 +111,7 @@ export default function Page() {
       )
     }
 
-    if (stage === "clinical" && practitioner) {
+    if (visibleStage === "clinical" && practitioner) {
       return (
         <ClinicalMode
           store={store}
@@ -129,13 +124,13 @@ export default function Page() {
       )
     }
 
-    if (stage === "segment") {
+    if (visibleStage === "segment") {
       // Screen 1.5 — confirm minor vs adult segmentation before entering the app.
       if (!user) return <SplashScreen onEnter={() => setStage("auth")} onReset={handleReset} />
       return <SegmentationScreen user={user} onProceed={() => setStage("app")} />
     }
 
-    if (stage === "emergency") {
+    if (visibleStage === "emergency") {
       return (
         <EmergencyView
           profile={emergencyTarget ?? store.emergencyProfile}
