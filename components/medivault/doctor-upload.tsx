@@ -5,12 +5,11 @@ import {
   UploadCloud,
   FileCheck2,
   QrCode,
-  ScanLine,
   BadgeCheck,
   AlertCircle,
-  Loader2,
 } from "lucide-react"
 import { ModalShell } from "./shared"
+import { QrCameraScanner } from "./qr-camera-scanner"
 import { SPECIALIZATIONS, type StoreApi } from "@/lib/store"
 
 export function DoctorUpload({
@@ -31,21 +30,10 @@ export function DoctorUpload({
   const [fileName, setFileName] = useState("")
   const [license, setLicense] = useState("")
   const [verified, setVerified] = useState(false)
-  const [scanning, setScanning] = useState(false)
+  const [scannerOpen, setScannerOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-
-  function startScan() {
-    setScanning(true)
-    setError(null)
-    setTimeout(() => {
-      const generated = "MED-" + Math.floor(100000 + Math.random() * 900000)
-      setLicense(generated)
-      setVerified(true)
-      setScanning(false)
-    }, 2200)
-  }
 
   function verifyTyped() {
     if (license.trim().length < 4) {
@@ -84,20 +72,8 @@ export function DoctorUpload({
     "w-full rounded-xl border border-border bg-input px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
 
   return (
-    <ModalShell title="Add Medical Report" subtitle="Verified doctor upload" onClose={onClose} headerAccent>
-      {scanning && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-foreground/80 text-white">
-          <div className="relative h-52 w-52 overflow-hidden rounded-2xl border-2 border-accent/70">
-            <div className="mv-scan absolute left-0 right-0 top-0 h-1 bg-accent shadow-[0_0_16px_4px] shadow-accent" />
-            <QrCode className="absolute inset-0 m-auto h-24 w-24 text-white/30" />
-          </div>
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <ScanLine className="h-4 w-4 animate-pulse" />
-            Scanning license QR code...
-          </div>
-        </div>
-      )}
-
+    <>
+      <ModalShell title="Add Medical Report" subtitle="Verified doctor upload" onClose={onClose} headerAccent>
       <form onSubmit={submit} className="space-y-4 p-5">
         <div>
           <Label>Doctor&apos;s Full Name</Label>
@@ -219,7 +195,7 @@ export function DoctorUpload({
             />
             <button
               type="button"
-              onClick={startScan}
+              onClick={() => setScannerOpen(true)}
               aria-label="Scan QR code"
               className="grid shrink-0 place-items-center rounded-xl bg-primary px-3 text-primary-foreground transition hover:brightness-110"
             >
@@ -253,11 +229,39 @@ export function DoctorUpload({
           type="submit"
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-3 text-sm font-bold text-accent-foreground shadow-lg shadow-accent/25 transition hover:brightness-110"
         >
-          {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Upload Report
         </button>
       </form>
-    </ModalShell>
+      </ModalShell>
+      {scannerOpen && (
+        <QrCameraScanner
+          onClose={() => setScannerOpen(false)}
+          onDetected={(value) => {
+            let decodedValue = value
+            try {
+              const payload: unknown = JSON.parse(value)
+              if (payload && typeof payload === "object") {
+                const record = payload as Record<string, unknown>
+                const licenseValue = record.licenseNumber ?? record.registrationNumber ?? record.license ?? record.license_number
+                if (typeof licenseValue === "string" && licenseValue.trim()) decodedValue = licenseValue.trim()
+                if (typeof record.doctorName === "string") setDoctorName(record.doctorName)
+                if (typeof record.specialization === "string") setSpecialization(record.specialization)
+                if (typeof record.clinic === "string") setClinic(record.clinic)
+                if (typeof record.date === "string") setDate(record.date)
+                if (typeof record.time === "string") setTime(record.time)
+                if (typeof record.notes === "string") setNotes(record.notes)
+              }
+            } catch {
+              // Plain-text QR payloads are treated as the scanned license value.
+            }
+            setLicense(decodedValue)
+            setVerified(false)
+            setScannerOpen(false)
+            setError(null)
+          }}
+        />
+      )}
+    </>
   )
 }
 
