@@ -68,7 +68,7 @@ export default function Page() {
     // resets automatically once there is no active user. Non-session data in
     // localStorage (registered accounts, reports) is preserved.
     store.logout()
-    // Reset all in-memory navigation state and return to Screen 0 (Splash / NFC entry).
+    // Reset navigation state and return to the landing screen.
     setStage("splash")
     setTab("home")
     setSubScreen(null)

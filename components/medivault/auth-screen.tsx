@@ -29,6 +29,7 @@ export function AuthScreen({
   /** Login can authenticate by email+password or by physical Card/Tag ID + password. */
   const [loginMethod, setLoginMethod] = useState<"email" | "card">("email")
   const [error, setError] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const [email, setEmail] = useState("")
@@ -50,6 +51,7 @@ export function AuthScreen({
     e.preventDefault()
     if (isSubmitting) return
     setError(null)
+    setStatusMessage(null)
     setIsSubmitting(true)
     try {
       if (mode === "login") {
@@ -62,8 +64,12 @@ export function AuthScreen({
         if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
         if (!agreeTerms)
           return setError("You must agree to the Terms of Service and Privacy Policy to register.")
-        const res = await store.register({ name, dob, bloodGroup, gender, email, password, cardId: signupCardId })
+        const res = await store.register({ name, dob, bloodGroup, gender, email: email.trim(), password, cardId: signupCardId.trim() })
         if (!res.ok) return setError(res.error ?? "Sign up failed.")
+        if (res.pendingConfirmation) {
+          setStatusMessage(res.message ?? "Confirm your email before signing in.")
+          return
+        }
         onAuthed("signup")
       }
     } catch (submitError) {
@@ -104,6 +110,7 @@ export function AuthScreen({
             onClick={() => {
               setMode(m)
               setError(null)
+              setStatusMessage(null)
             }}
             className={`flex-1 rounded-full py-2 text-sm font-semibold capitalize transition-colors ${
               mode === m ? "bg-primary text-primary-foreground shadow" : "text-muted-foreground"
@@ -263,6 +270,12 @@ export function AuthScreen({
               I agree to the <LegalLinks />.
             </span>
           </label>
+        )}
+
+        {statusMessage && (
+          <p role="status" className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-foreground">
+            {statusMessage}
+          </p>
         )}
 
         {error && (
