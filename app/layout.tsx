@@ -4,7 +4,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'LyfeVault - Your Health, Secured',
-  description: 'A secure digital medical passport with NFC/QR entry, emergency access, medical timeline, doctor uploads, and AI health insights.',
+  description: 'A secure digital medical passport with emergency access, medical history, practitioner verification, and prescription tools.',
   generator: 'v0.app',
   icons: {
     icon: [

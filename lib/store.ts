@@ -60,13 +60,14 @@ export type UserProfile = {
 }
 
 type PatientMatch = { kind: "user" | "dependent"; cardId: string; name: string }
-type Result = { ok: boolean; error?: string }
+type Result = { ok: boolean; error?: string; message?: string; pendingConfirmation?: boolean }
 type StoredCredential = { salt: string; hash: string }
 
 type ProfileRow = {
+  auth_user_id: string | null
   email: string
-  password_salt: string
-  password_hash: string
+  password_salt: string | null
+  password_hash: string | null
   name: string | null
   dob: string | null
   blood_group: string | null
@@ -267,17 +268,19 @@ function mapReportRow(row: ReportRow): MedicalReport {
   }
 }
 
-async function fetchFullProfileByEmail(email: string): Promise<{ row: ProfileRow; profile: UserProfile } | null> {
+async function fetchFullProfileByEmail(email: string, authUserId?: string): Promise<{ row: ProfileRow; profile: UserProfile } | null> {
   const key = normalizeEmail(email)
-  if (!key) return null
+  if (!key && !authUserId) return null
 
-  const { data: profileData, error: profileError } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("email", key)
-    .maybeSingle()
+  const profileQuery = supabase.from("profiles").select("*")
+  const { data: profileData, error: profileError } = authUserId
+    ? await profileQuery.eq("auth_user_id", authUserId).maybeSingle()
+    : await profileQuery.eq("email", key).maybeSingle()
 
   if (profileError) throw new Error(profileError.message)
+  if (!profileData && authUserId && key) {
+    return fetchFullProfileByEmail(key)
+  }
   if (!profileData) return null
 
   const row = profileData as ProfileRow
@@ -314,6 +317,55 @@ async function fetchFullProfileByEmail(email: string): Promise<{ row: ProfileRow
   })
 
   return { row, profile }
+}
+
+async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: string; user_metadata?: Record<string, unknown> }): Promise<UserProfile | null> {
+  const email = normalizeEmail(user.email ?? "")
+  if (!email) return null
+
+  const existing = await fetchFullProfileByEmail(email, user.id)
+  if (existing) {
+    if (existing.row.auth_user_id !== user.id) {
+      const { error } = await supabase.from("profiles").update({ auth_user_id: user.id }).eq("email", email)
+      if (error) throw new Error(error.message)
+    }
+    return existing.profile
+  }
+
+  const metadata = user.user_metadata ?? {}
+  const profile = normalizeUser({
+    name: String(metadata.name ?? ""),
+    dob: String(metadata.dob ?? ""),
+    bloodGroup: String(metadata.blood_group ?? ""),
+    gender: String(metadata.gender ?? ""),
+    email,
+    password: "",
+    cardId: String(metadata.card_id ?? ""),
+    allergies: [],
+    conditions: [],
+    medications: [],
+    contacts: [],
+    reports: [],
+    dependents: [],
+  })
+  const { error } = await supabase.from("profiles").upsert({
+    auth_user_id: user.id,
+    email,
+    name: profile.name,
+    dob: profile.dob,
+    blood_group: profile.bloodGroup,
+    gender: profile.gender,
+    card_id: profile.cardId,
+    allergies: [],
+    conditions: [],
+    medications: [],
+    contacts: [],
+    updated_at: Date.now(),
+  }, { onConflict: "auth_user_id" })
+  if (error) throw new Error(error.message)
+
+  const created = await fetchFullProfileByEmail(email, user.id)
+  return created?.profile ?? profile
 }
 
 async function syncDependentsToSupabase(ownerEmail: string, dependents: DependentProfile[]): Promise<void> {
@@ -400,17 +452,19 @@ export function useStore(): StoreApi {
     let active = true
     ;(async () => {
       try {
-        const email = readSessionEmail()
-        if (!email) {
+        const { data: { user }, error } = await supabase.auth.getUser()
+        if (error || !user) {
+          removeSession()
           if (active) {
             setCurrentUser(null)
             setReady(true)
           }
           return
         }
-        const loaded = await fetchFullProfileByEmail(email)
+        const profile = await loadOrCreateAuthenticatedProfile(user)
         if (active) {
-          setCurrentUser(loaded ? loaded.profile : null)
+          if (profile) writeSession(profile.email)
+          setCurrentUser(profile)
           setReady(true)
         }
       } catch {
@@ -429,66 +483,56 @@ export function useStore(): StoreApi {
     if (!email || !password) return { ok: false, error: "Email and password are required." }
     if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
 
+    const profile = normalizeUser({
+      ...data,
+      email,
+      password: "",
+      cardId: data.cardId?.trim() ?? "",
+      allergies: [],
+      conditions: [],
+      medications: [],
+      contacts: [],
+      reports: [],
+      dependents: [],
+    })
+
     try {
-      const { data: existingEmail, error: emailLookupError } = await supabase
-        .from("profiles")
-        .select("email")
-        .eq("email", email)
-        .maybeSingle()
+      const { data: authData, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback`,
+          data: {
+            name: profile.name,
+            dob: profile.dob,
+            blood_group: profile.bloodGroup,
+            gender: profile.gender,
+            card_id: profile.cardId,
+          },
+        },
+      })
 
-      if (emailLookupError) return { ok: false, error: emailLookupError.message }
-      if (existingEmail) return { ok: false, error: "An account with this email already exists." }
+      if (error) {
+        const message = error.message.toLowerCase()
+        if (message.includes("already registered") || message.includes("already been registered")) {
+          return { ok: false, error: "Unable to create the account with these details. Try signing in instead." }
+        }
+        return { ok: false, error: error.message }
+      }
+      if (!authData.user) return { ok: false, error: "Account creation could not be completed. Try again." }
 
-      const cardId = data.cardId?.trim() ?? ""
-      if (cardId) {
-        const normalizedTarget = normalizeCardId(cardId)
-        const [{ data: allProfiles, error: pErr }, { data: allDependents, error: dErr }] = await Promise.all([
-          supabase.from("profiles").select("card_id"),
-          supabase.from("dependents").select("medi_tag_id"),
-        ])
-        if (pErr) return { ok: false, error: pErr.message }
-        if (dErr) return { ok: false, error: dErr.message }
-
-        const cardTaken =
-          (allProfiles ?? []).some((p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === normalizedTarget) ||
-          (allDependents ?? []).some((d) => normalizeCardId(String((d as { medi_tag_id?: string }).medi_tag_id ?? "")) === normalizedTarget)
-
-        if (cardTaken) return { ok: false, error: "This Card/Tag ID is already registered." }
+      if (!authData.session) {
+        return {
+          ok: true,
+          pendingConfirmation: true,
+          message: "Account created. Confirm your email using the link we sent, then sign in to finish setting up your profile.",
+        }
       }
 
-      const credential = await hashPassword(password)
-      const profile = normalizeUser({
-        ...data,
-        email,
-        password: "",
-        cardId,
-        allergies: [],
-        conditions: [],
-        medications: [],
-        contacts: [],
-        reports: [],
-        dependents: [],
-      })
-
-      const { error: insertError } = await supabase.from("profiles").insert({
-        email,
-        password_salt: credential.salt,
-        password_hash: credential.hash,
-        name: profile.name,
-        dob: profile.dob,
-        blood_group: profile.bloodGroup,
-        gender: profile.gender,
-        card_id: profile.cardId,
-        allergies: [],
-        conditions: [],
-        medications: [],
-        contacts: [],
-        updated_at: Date.now(),
-      })
-
-      if (insertError) return { ok: false, error: insertError.message }
-      if (!writeSession(email)) return { ok: false, error: "Your account was saved, but this browser could not persist the sign-in session." }
-      setCurrentUser(profile)
+      const savedProfile = await loadOrCreateAuthenticatedProfile(authData.user)
+      if (!savedProfile) return { ok: false, error: "Your account was created, but its profile could not be loaded." }
+      writeSession(savedProfile.email)
+      setCurrentUser(savedProfile)
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Could not create the account." }
@@ -500,12 +544,23 @@ export function useStore(): StoreApi {
     if (!key || !password) return { ok: false, error: "Email and password are required." }
 
     try {
-      const loaded = await fetchFullProfileByEmail(key)
-      if (!loaded || !(await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: key, password })
+      if (error) {
+        const message = error.message.toLowerCase()
+        if (message.includes("email not confirmed")) {
+          return { ok: false, error: "Confirm your email using the link we sent before signing in." }
+        }
         return { ok: false, error: "Email or password is incorrect." }
       }
-      if (!writeSession(key)) return { ok: false, error: "This browser could not save the sign-in session." }
-      setCurrentUser(loaded.profile)
+      if (!data.user) return { ok: false, error: "Email or password is incorrect." }
+
+      const profile = await loadOrCreateAuthenticatedProfile(data.user)
+      if (!profile) {
+        await supabase.auth.signOut()
+        return { ok: false, error: "Your account profile could not be loaded. Contact support." }
+      }
+      writeSession(profile.email)
+      setCurrentUser(profile)
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Could not sign in." }
@@ -513,28 +568,33 @@ export function useStore(): StoreApi {
   }, [])
 
   const loginByCard: StoreApi["loginByCard"] = useCallback(async (cardId, password) => {
-    const target = normalizeCardId(cardId)
+    const target = cardId.trim()
     if (!target) return { ok: false, error: "Enter your Card/Tag ID." }
+    if (!password) return { ok: false, error: "Enter your password." }
 
     try {
-      const { data: rows, error } = await supabase.from("profiles").select("email, card_id")
-      if (error) return { ok: false, error: error.message }
-
-      const matchedRow = (rows ?? []).find(
-        (r) => normalizeCardId(String((r as { card_id?: string }).card_id ?? "")) === target
-      ) as { email: string } | undefined
-
-      if (!matchedRow) return { ok: false, error: "Card/Tag ID or password is incorrect." }
-
-      const loaded = await fetchFullProfileByEmail(matchedRow.email)
-      if (!loaded || !(await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
-        return { ok: false, error: "Card/Tag ID or password is incorrect." }
+      const response = await fetch("/api/auth/card-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardId: target, password }),
+      })
+      const result = await response.json() as { error?: string; session?: { access_token: string; refresh_token: string } }
+      if (!response.ok || !result.session) {
+        return { ok: false, error: result.error ?? "Card/Tag ID or password is incorrect." }
       }
-      if (!writeSession(loaded.profile.email)) return { ok: false, error: "This browser could not save the sign-in session." }
-      setCurrentUser(loaded.profile)
+
+      const { data, error } = await supabase.auth.setSession(result.session)
+      if (error || !data.user) return { ok: false, error: "Card/Tag ID or password is incorrect." }
+      const profile = await loadOrCreateAuthenticatedProfile(data.user)
+      if (!profile) {
+        await supabase.auth.signOut()
+        return { ok: false, error: "Your account profile could not be loaded. Contact support." }
+      }
+      writeSession(profile.email)
+      setCurrentUser(profile)
       return { ok: true }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Could not sign in with Card/Tag ID." }
+    } catch {
+      return { ok: false, error: "Card/Tag ID or password is incorrect." }
     }
   }, [])
 
@@ -707,7 +767,7 @@ export function useStore(): StoreApi {
 
     try {
       const loaded = await fetchFullProfileByEmail(key)
-      if (loaded && (await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
+      if (loaded?.row.password_salt && loaded.row.password_hash && (await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
         return { ok: true }
       }
 
@@ -763,6 +823,7 @@ export function useStore(): StoreApi {
   }, [])
 
   const logout: StoreApi["logout"] = useCallback(async () => {
+    await supabase.auth.signOut()
     removeSession()
     setCurrentUser(null)
   }, [])
