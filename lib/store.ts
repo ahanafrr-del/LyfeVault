@@ -21,6 +21,10 @@ export type MedicalReport = {
   fileName: string
   notes: string
   createdAt: number
+  filePath?: string
+  fileUrl?: string
+  uploadedByRole?: "patient" | "practitioner"
+  doctorMmcId?: string
 }
 
 export type DependentProfile = {
@@ -32,6 +36,7 @@ export type DependentProfile = {
   bloodGroup: string
   allergies: string[]
   conditions: string[]
+  medications: string[]
   contacts: EmergencyContact[]
   /** Guardian-assigned login for subsequent minor view-only access. */
   assignedEmail: string
@@ -92,6 +97,9 @@ type ReportRow = {
   file_name: string | null
   notes: string | null
   created_at: number | string | null
+  file_path?: string | null
+  uploaded_by_role?: "patient" | "practitioner" | null
+  doctor_mmc_id?: string | null
 }
 
 type DependentRow = {
@@ -103,6 +111,7 @@ type DependentRow = {
   blood_group: string | null
   allergies: unknown
   conditions: unknown
+  medications?: unknown
   contacts: unknown
   assigned_email: string | null
   assigned_password: string | null
@@ -163,6 +172,7 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
       parentalSecretCode: dependent.parentalSecretCode ?? "",
       allergies: dependent.allergies ?? [],
       conditions: dependent.conditions ?? [],
+      medications: dependent.medications ?? [],
       contacts: dependent.contacts ?? [],
     })),
   }
@@ -229,7 +239,7 @@ function dependentAsUser(parent: UserProfile, dependent: DependentProfile): User
     cardId: dependent.mediTagId,
     allergies: dependent.allergies,
     conditions: dependent.conditions,
-    medications: [],
+    medications: dependent.medications,
     contacts: dependent.contacts,
     reports: [],
     dependents: [],
@@ -245,10 +255,11 @@ function mapDependentRow(row: DependentRow): DependentProfile {
     bloodGroup: row.blood_group ?? "",
     allergies: asStringArray(row.allergies),
     conditions: asStringArray(row.conditions),
+    medications: asStringArray(row.medications),
     contacts: asContactsArray(row.contacts),
     assignedEmail: normalizeEmail(row.assigned_email ?? ""),
-    assignedPassword: row.assigned_password ?? "",
-    parentalSecretCode: row.parental_secret_code ?? "",
+  assignedPassword: "",
+  parentalSecretCode: "",
     mediTagId: row.medi_tag_id ?? "",
   }
 }
@@ -265,6 +276,9 @@ function mapReportRow(row: ReportRow): MedicalReport {
     fileName: row.file_name ?? "",
     notes: row.notes ?? "",
     createdAt: Number(row.created_at ?? 0),
+    filePath: row.file_path ?? undefined,
+    uploadedByRole: row.uploaded_by_role ?? "patient",
+    doctorMmcId: row.doctor_mmc_id ?? undefined,
   }
 }
 
@@ -300,6 +314,13 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   if (reportsError) throw new Error(reportsError.message)
   if (dependentsError) throw new Error(dependentsError.message)
 
+  const mappedReports = (reportsData ?? []).map((item) => mapReportRow(item as ReportRow))
+  const signedReports = await Promise.all(mappedReports.map(async (report) => {
+    if (!report.filePath) return report
+    const { data } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 900)
+    return { ...report, fileUrl: data?.signedUrl }
+  }))
+
   const profile = normalizeUser({
     name: row.name ?? "",
     dob: row.dob ?? "",
@@ -312,7 +333,7 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
     conditions: asStringArray(row.conditions),
     medications: asStringArray(row.medications),
     contacts: asContactsArray(row.contacts),
-    reports: (reportsData ?? []).map((item) => mapReportRow(item as ReportRow)),
+    reports: signedReports,
     dependents: (dependentsData ?? []).map((item) => mapDependentRow(item as DependentRow)),
   })
 
@@ -322,6 +343,29 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
 async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: string; user_metadata?: Record<string, unknown> }): Promise<UserProfile | null> {
   const email = normalizeEmail(user.email ?? "")
   if (!email) return null
+
+  const { data: linkedRow, error: linkedError } = await supabase
+    .from("dependents")
+    .select("*")
+    .eq("assigned_email", email)
+    .maybeSingle()
+  if (linkedError) throw new Error(linkedError.message)
+  if (linkedRow) {
+    const dependent = mapDependentRow(linkedRow as DependentRow)
+    const { data: linkedReports, error: linkedReportsError } = await supabase
+      .from("medical_reports")
+      .select("*")
+      .eq("dependent_id", dependent.id)
+      .order("created_at", { ascending: false })
+    if (linkedReportsError) throw new Error(linkedReportsError.message)
+    const reports = await Promise.all((linkedReports ?? []).map(async (item) => {
+      const report = mapReportRow(item as ReportRow)
+      if (!report.filePath) return report
+      const { data } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 900)
+      return { ...report, fileUrl: data?.signedUrl }
+    }))
+    return { ...dependentAsUser({ email } as UserProfile, dependent), reports }
+  }
 
   const existing = await fetchFullProfileByEmail(email, user.id)
   if (existing) {
@@ -391,31 +435,29 @@ async function syncDependentsToSupabase(ownerEmail: string, dependents: Dependen
   }
 
   if (dependents.length > 0) {
-    const payload = dependents.map((d) => ({
-      id: d.id,
-      owner_email: key,
-      name: d.name,
-      dob: d.dob,
-      relationship: d.relationship,
-      blood_group: d.bloodGroup,
-      allergies: d.allergies,
-      conditions: d.conditions,
-      contacts: d.contacts,
-      assigned_email: normalizeEmail(d.assignedEmail),
-      assigned_password: d.assignedPassword,
-      parental_secret_code: d.parentalSecretCode,
-      medi_tag_id: d.mediTagId,
-    }))
-
-    const { error: upsertError } = await supabase
-      .from("dependents")
-      .upsert(payload, { onConflict: "id" })
-    if (upsertError) throw new Error(upsertError.message)
+    for (const dependent of dependents) {
+      const { error: updateError } = await supabase
+        .from("dependents")
+        .update({
+          name: dependent.name,
+          dob: dependent.dob,
+          relationship: dependent.relationship,
+          blood_group: dependent.bloodGroup,
+          allergies: dependent.allergies,
+          conditions: dependent.conditions,
+          medications: dependent.medications,
+          contacts: dependent.contacts,
+          medi_tag_id: dependent.mediTagId,
+        })
+        .eq("id", dependent.id)
+        .eq("owner_email", key)
+      if (updateError) throw new Error(updateError.message)
+    }
   }
 }
 
 type AuthData = Omit<Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">, "cardId"> & { cardId?: string }
-type Practitioner = { doctorName: string; registrationNumber: string; institution: string }
+type Practitioner = { doctorName: string; registrationNumber: string; institution: string; hospitalPhone?: string }
 
 export type StoreApi = {
   ready: boolean
@@ -601,31 +643,25 @@ export function useStore(): StoreApi {
   const getUserByCardId: StoreApi["getUserByCardId"] = useCallback(async (cardId) => {
     const target = normalizeCardId(cardId)
     if (!target) return null
-
     try {
-      const { data: profilesData, error: pErr } = await supabase.from("profiles").select("email, card_id")
-      if (pErr) return null
-
-      const directMatch = (profilesData ?? []).find(
-        (p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === target
-      ) as { email: string } | undefined
-
-      if (directMatch) {
-        const loaded = await fetchFullProfileByEmail(directMatch.email)
-        return loaded ? loaded.profile : null
-      }
-
-      const { data: depsData, error: dErr } = await supabase.from("dependents").select("*")
-      if (dErr) return null
-
-      const depRow = (depsData ?? []).find(
-        (d) => normalizeCardId(String((d as DependentRow).medi_tag_id ?? "")) === target
-      ) as DependentRow | undefined
-
-      if (!depRow) return null
-      const parentLoaded = await fetchFullProfileByEmail(depRow.owner_email)
-      if (!parentLoaded) return null
-      return dependentAsUser(parentLoaded.profile, mapDependentRow(depRow))
+      const { data, error } = await supabase.rpc("emergency_lookup_card", { p_card_id: target })
+      if (error || !data || typeof data !== "object") return null
+      const record = data as Record<string, unknown>
+      return normalizeUser({
+        name: String(record.name ?? ""),
+        dob: String(record.dob ?? ""),
+        bloodGroup: String(record.blood_group ?? ""),
+        gender: String(record.gender ?? ""),
+        email: "",
+        password: "",
+        cardId: String(record.card_id ?? ""),
+        allergies: asStringArray(record.allergies),
+        conditions: asStringArray(record.conditions),
+        medications: asStringArray(record.medications),
+        contacts: asContactsArray(record.contacts),
+        reports: [],
+        dependents: [],
+      })
     } catch {
       return null
     }
@@ -688,9 +724,27 @@ export function useStore(): StoreApi {
     const email = readSessionEmail()
     if (!email) throw new Error("Sign in to update your profile.")
 
+    const { data: linkedRow, error: linkedError } = await supabase.from("dependents").select("*").eq("assigned_email", email).maybeSingle()
+    if (linkedError) throw new Error(linkedError.message)
+    if (linkedRow) {
+      const linkedProfile = dependentAsUser({ email } as UserProfile, mapDependentRow(linkedRow as DependentRow))
+      const updatedDependent = normalizeUser(update(linkedProfile))
+      const { error } = await supabase.rpc("update_linked_dependent_profile", {
+        p_data: {
+          blood_group: updatedDependent.bloodGroup,
+          allergies: updatedDependent.allergies,
+          conditions: updatedDependent.conditions,
+          medications: updatedDependent.medications,
+          contacts: updatedDependent.contacts,
+        },
+      })
+      if (error) throw new Error(error.message)
+      setCurrentUser(updatedDependent)
+      return
+    }
+
     const loaded = await fetchFullProfileByEmail(email)
     if (!loaded) throw new Error("Your profile could not be found.")
-
     const updated = normalizeUser(update(loaded.profile))
 
     const { error: profileUpdateError } = await supabase
@@ -719,45 +773,27 @@ export function useStore(): StoreApi {
 
   const addReportToCard: StoreApi["addReportToCard"] = useCallback(async (cardId, report, practitioner) => {
     if (!practitioner) return { ok: false, error: "Practitioner identity is required." }
-    const target = normalizeCardId(cardId)
-
     try {
-      const { data: profilesData, error: pErr } = await supabase.from("profiles").select("email, card_id")
-      if (pErr) return { ok: false, error: pErr.message }
-
-      const matched = (profilesData ?? []).find(
-        (p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === target
-      ) as { email: string } | undefined
-
-      if (!matched) return { ok: false, error: "No registered account was found for this Card/Tag ID." }
-
-      const ownerEmail = normalizeEmail(matched.email)
-      const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
-
-      const { error: insertError } = await supabase.from("medical_reports").insert({
-        id: newReport.id,
-        owner_email: ownerEmail,
-        doctor_name: newReport.doctorName,
-        specialization: newReport.specialization,
-        clinic: newReport.clinic,
-        date: newReport.date,
-        time: newReport.time,
-        license_number: newReport.licenseNumber,
-        file_name: newReport.fileName,
-        notes: newReport.notes,
-        created_at: newReport.createdAt,
+      const { error } = await supabase.rpc("practitioner_add_report", {
+        p_card_id: normalizeCardId(cardId),
+        p_report: {
+          doctor_name: practitioner.doctorName,
+          specialization: report.specialization,
+          clinic: report.clinic || practitioner.institution,
+          date: report.date,
+          time: report.time,
+          license_number: practitioner.registrationNumber,
+          file_name: report.fileName,
+          notes: report.notes,
+          file_path: report.filePath ?? null,
+          doctor_mmc_id: practitioner.registrationNumber,
+        },
       })
-
-      if (insertError) return { ok: false, error: insertError.message }
-
-      if (readSessionEmail() === ownerEmail) {
-        const refreshed = await fetchFullProfileByEmail(ownerEmail)
-        if (refreshed) setCurrentUser(refreshed.profile)
-      }
+      if (error) return { ok: false, error: "The report could not be attached to this patient." }
 
       return { ok: true }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Could not save the report." }
+    } catch {
+      return { ok: false, error: "The report could not be attached to this patient." }
     }
   }, [])
 
@@ -857,17 +893,9 @@ export function useStore(): StoreApi {
     await updateStoredProfile((profile) => ({ ...profile, ...partial, email: profile.email, password: "" }))
   }, [updateStoredProfile])
 
-  const addDependent: StoreApi["addDependent"] = useCallback(async (data) => {
-    await updateStoredProfile((profile) => ({
-      ...profile,
-      dependents: [...profile.dependents, {
-        ...data,
-        assignedEmail: normalizeEmail(data.assignedEmail),
-        id: uid(),
-        mediTagId: makeMediTag(),
-      }],
-    }))
-  }, [updateStoredProfile])
+  const addDependent: StoreApi["addDependent"] = useCallback(async () => {
+    throw new Error("Dependents must complete the Gmail verification flow before they can be linked.")
+  }, [])
 
   const updateDependent: StoreApi["updateDependent"] = useCallback(async (id, partial) => {
     await updateStoredProfile((profile) => ({

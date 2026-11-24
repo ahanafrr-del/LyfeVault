@@ -309,7 +309,6 @@ export function AuthScreen({
 
       {scanOpen && (
         <PractitionerScan
-          store={store}
           onClose={() => setScanOpen(false)}
           onApproved={(session, patientCardId) => {
             setScanOpen(false)

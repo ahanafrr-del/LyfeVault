@@ -17,6 +17,7 @@ import { DoctorUpload } from "@/components/medivault/doctor-upload"
 import { ProfileScreen } from "@/components/medivault/profile-screen"
 import { ClinicalMode } from "@/components/medivault/clinical-mode"
 import type { PractitionerSession } from "@/components/medivault/practitioner-scan"
+import { supabase } from "@/lib/supabase"
 import { ScreenHeader, EmptyState } from "@/components/medivault/shared"
 
 type Stage = "splash" | "auth" | "segment" | "emergency" | "app" | "clinical"
@@ -107,9 +108,18 @@ export default function Page() {
         <ClinicalMode
           store={store}
           session={practitioner}
-          onExit={() => {
+          onExit={async () => {
             setPractitioner(null)
-            setStage("auth")
+            if (practitioner.previousAccessToken && practitioner.previousRefreshToken) {
+              await supabase.auth.setSession({
+                access_token: practitioner.previousAccessToken,
+                refresh_token: practitioner.previousRefreshToken,
+              })
+              setStage("app")
+            } else {
+              await supabase.auth.signOut()
+              setStage("auth")
+            }
           }}
         />
       )

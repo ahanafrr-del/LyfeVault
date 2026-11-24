@@ -121,10 +121,16 @@ function ReportView({ report, patient }: { report: MedicalReport; patient: strin
             {report.notes || "No additional notes were provided with this report."}
           </p>
         </div>
-        <div className="mt-4 flex items-center gap-2 rounded-xl bg-accent/10 px-3 py-2 text-xs font-medium text-accent">
-          <Stethoscope className="h-4 w-4" />
-          Verified upload from licensed provider
-        </div>
+        {report.fileUrl ? (
+          <a href={report.fileUrl} target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2.5 text-xs font-semibold text-primary-foreground">
+            <FileText className="size-4" /> View / download attached file
+          </a>
+        ) : (
+          <div className="mt-4 flex items-center gap-2 rounded-xl bg-accent/10 px-3 py-2 text-xs font-medium text-accent">
+            <Stethoscope className="h-4 w-4" />
+            {report.filePath ? "File access is temporarily unavailable" : "Verified report details"}
+          </div>
+        )}
       </div>
     </div>
   )
