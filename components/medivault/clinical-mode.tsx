@@ -56,7 +56,7 @@ export function ClinicalMode({
     setLookupError(null)
     const id = cardId.trim()
     if (!id) return setLookupError("Enter the patient's Card/Tag ID.")
-    const { data, error } = await supabase.rpc("practitioner_lookup_patient", { p_card_id: id })
+    const { data, error } = await supabase.rpc("practitioner_lookup_patient", { p_card_id: id, p_mmc_id: session.registrationNumber })
     if (error || !data) return setLookupError("No patient found for this Card/Tag ID.")
     const record = data as Record<string, unknown>
     const reportRows = Array.isArray(record.reports) ? record.reports as Record<string, unknown>[] : []
@@ -134,7 +134,6 @@ export function ClinicalMode({
       doctorName: session.doctorName,
       registrationNumber: session.registrationNumber,
       institution: session.institution,
-      hospitalPhone: session.hospitalPhone,
     })
     if (!res.ok) {
       await supabase.storage.from("medical-reports").remove([filePath])

@@ -110,16 +110,8 @@ export default function Page() {
           session={practitioner}
           onExit={async () => {
             setPractitioner(null)
-            if (practitioner.previousAccessToken && practitioner.previousRefreshToken) {
-              await supabase.auth.setSession({
-                access_token: practitioner.previousAccessToken,
-                refresh_token: practitioner.previousRefreshToken,
-              })
-              setStage("app")
-            } else {
-              await supabase.auth.signOut()
-              setStage("auth")
-            }
+            const { data } = await supabase.auth.getSession()
+            setStage(data.session ? "app" : "auth")
           }}
         />
       )
