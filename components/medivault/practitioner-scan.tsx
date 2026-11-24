@@ -38,7 +38,11 @@ export function PractitionerScan({
       const { data: authorized, error: allowlistError } = await supabase.rpc("practitioner_is_authorized_by_mmc", {
         p_mmc_id: normalizedId,
       })
-      if (allowlistError || !authorized) {
+      if (allowlistError) {
+        setError("We could not check this ID right now. Please try again.")
+        return
+      }
+      if (!authorized) {
         setError("This LyfeVault Medical ID is not on the authorized clinic list.")
         return
       }
@@ -73,15 +77,15 @@ export function PractitionerScan({
         headerAccent
         onClose={onClose}
       >
-        <form onSubmit={verifyPractitioner} className="space-y-4 p-5">
+        <form onSubmit={verifyPractitioner} className="flex w-full min-w-0 flex-col gap-4 p-4 sm:p-6">
             <div className="flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4">
               <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
               <p className="text-xs leading-relaxed text-muted-foreground">Verify and continue using your LyfeVault Medical ID. No phone number or SMS code is required.</p>
             </div>
             <label className="block">
               <span className="mb-1 block text-xs font-semibold text-muted-foreground">LyfeVault Medical MMC</span>
-              <div className="flex gap-2">
-                <input className={INPUT} autoComplete="off" aria-label="LyfeVault Medical ID" placeholder="Provide your LyfeVault Medical ID" value={mmcId} onChange={(event) => setMmcId(event.target.value.trim())} />
+              <div className="flex min-w-0 gap-2">
+                <input className={`${INPUT} min-w-0 flex-1`} autoComplete="off" aria-label="LyfeVault Medical ID" placeholder="Provide your LyfeVault Medical ID" value={mmcId} onChange={(event) => setMmcId(event.target.value.trim())} />
                 <button type="button" onClick={() => setQrOpen(true)} aria-label="Scan official MMC or KYD QR code" className="grid shrink-0 place-items-center rounded-xl bg-primary px-3 text-primary-foreground"><QrCode className="size-5" /></button>
               </div>
             </label>
