@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { ModalShell } from "./shared"
 import { computeAge, uid, BLOOD_GROUPS, type EmergencyContact, type StoreApi, type UserProfile } from "@/lib/store"
+import { supabase } from "@/lib/supabase"
 
 type Draft = {
   bloodGroup: string
@@ -94,13 +95,16 @@ export function MinorDashboard({
     setPinOpen(true)
   }
 
-  function verifyPin() {
-    const stored = linkedDependent?.parentalSecretCode ?? ""
-    if (!stored) {
-      setPinError("No Parental Secret Code is set for this profile. Ask the guardian to link it.")
+  async function verifyPin() {
+    if (!linkedDependent) {
+      setPinError("No guardian-linked dependent record was found.")
       return
     }
-    if (pin !== stored) {
+    const { data: valid, error } = await supabase.rpc("verify_dependent_secret_code", {
+      p_dependent_id: linkedDependent.id,
+      p_secret_code: pin,
+    })
+    if (error || !valid) {
       setPinError("Incorrect code. Access stays locked in read-only mode.")
       return
     }
