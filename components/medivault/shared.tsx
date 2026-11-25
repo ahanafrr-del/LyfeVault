@@ -77,8 +77,8 @@ export function ModalShell({
   headerAccent?: boolean
 }) {
   return (
-    <div className="mv-fade-in fixed inset-0 z-50 flex items-end justify-center bg-foreground/40 backdrop-blur-sm sm:items-center">
-      <div className="mv-slide-up flex max-h-[92%] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-card shadow-2xl sm:rounded-3xl">
+    <div className="mv-fade-in fixed inset-0 z-50 flex items-end justify-center bg-foreground/40 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="mv-slide-up flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-card pb-[env(safe-area-inset-bottom)] shadow-2xl sm:max-h-[min(92dvh,42rem)] sm:rounded-3xl sm:pb-0">
         <div
           className={`flex items-center justify-between px-5 py-4 ${
             headerAccent ? "bg-primary text-primary-foreground" : "border-b border-border text-foreground"
