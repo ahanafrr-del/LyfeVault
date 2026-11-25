@@ -58,6 +58,13 @@ export function SegmentationScreen({
         <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Account verified, {firstName}
         </p>
+        {user.cardId && (
+          <div className="mt-4 rounded-2xl border border-primary/15 bg-primary/5 px-4 py-3 text-center">
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Your LyfeVault Card ID</p>
+            <p className="mt-1 text-2xl font-black tracking-[0.16em] text-primary">{user.cardId}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">Keep this ID for quick access to your health passport.</p>
+          </div>
+        )}
 
         {needsBirthDate ? (
           <>

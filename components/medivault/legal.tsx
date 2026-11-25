@@ -89,7 +89,7 @@ function LegalModal({ doc, onClose }: { doc: LegalDoc; onClose: () => void }) {
   return (
     <ModalShell
       title={isTerms ? "Terms of Service" : "Privacy Policy"}
-      subtitle="Last Updated: July 2026"
+      subtitle={isTerms ? "Last Updated: July 2026" : "Effective November 25, 2026"}
       headerAccent
       onClose={onClose}
     >
@@ -150,8 +150,7 @@ export function LegalFooter({ className = "" }: { className?: string }) {
 }
 
 /**
- * Inline "Terms of Service and Privacy Policy" links used inside the sign-up consent
- * checkbox label. Opens the same readable modals as the footer.
+ * Inline legal links used beside the sign-up consent checkbox. Opens the same readable modals as the footer.
  */
 export function LegalLinks() {
   const [open, setOpen] = useState<LegalDoc | null>(null)

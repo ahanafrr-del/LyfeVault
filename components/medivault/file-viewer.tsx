@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Image from "next/image"
 import { Download, Minus, Plus } from "lucide-react"
 import { ModalShell } from "./shared"
 
@@ -34,7 +35,7 @@ export function FileViewer({
         {isPdf ? (
           <iframe title={`PDF preview: ${fileName}`} src={fileUrl} className="h-[62dvh] min-h-80 w-full rounded-lg bg-white" />
         ) : (
-          <img src={fileUrl} alt={fileName || "Health document"} style={{ transform: `scale(${zoom})` }} className="max-h-[60dvh] max-w-full origin-center object-contain transition-transform" />
+          <Image src={fileUrl} alt={fileName || "Health document"} width={1600} height={1200} unoptimized style={{ transform: `scale(${zoom})` }} className="max-h-[60dvh] max-w-full origin-center object-contain transition-transform" />
         )}
       </div>
     </ModalShell>

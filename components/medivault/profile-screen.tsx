@@ -55,15 +55,17 @@ function splitList(value: string): string[] {
 export function ProfileScreen({
   store,
   user,
+  unlocked = false,
   onLogout,
   onPrivacy,
 }: {
   store: StoreApi
   user: UserProfile
+  unlocked?: boolean
   onLogout: () => void
   onPrivacy: () => void
 }) {
-  const readOnly = isChildProfile(user)
+  const readOnly = isChildProfile(user) && !unlocked
   const age = computeAge(user.dob)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Draft>(() => toDraft(user))

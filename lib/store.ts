@@ -354,7 +354,21 @@ async function syncDependentsToSupabase(ownerEmail: string, dependents: Dependen
   }
 }
 
-type AuthData = { name: string; email: string; password: string; dob?: string; bloodGroup?: string; gender?: string }
+type AuthData = { name: string; email: string; password: string; dob: string; cardId?: string; parentalMasterKey?: string; bloodGroup?: string; gender?: string }
+
+const PARENTAL_KEY_ITERATIONS = 310_000
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+async function hashParentalKey(key: string, saltHex: string): Promise<string> {
+  const salt = Uint8Array.from(saltHex.match(/.{1,2}/g) ?? [], (byte) => Number.parseInt(byte, 16))
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), "PBKDF2", false, ["deriveBits"])
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: PARENTAL_KEY_ITERATIONS, hash: "SHA-256" }, material, 256)
+  return bytesToHex(new Uint8Array(bits))
+}
+
 export type StoreApi = {
   ready: boolean
   currentUser: UserProfile | null
@@ -365,6 +379,7 @@ export type StoreApi = {
   loginByCard: (cardId: string, password: string) => Promise<Result>
   loginWithPasskey: () => Promise<Result>
   registerPasskey: () => Promise<Result>
+  verifyParentalMasterKey: (key: string) => Promise<boolean>
   /** Looks up a registered user or dependent by physical Card/Tag ID. */
   getUserByCardId: (cardId: string) => Promise<UserProfile | null>
   requestPasswordReset: (email: string) => Promise<Result>
@@ -411,9 +426,22 @@ export function useStore(): StoreApi {
   const register: StoreApi["register"] = useCallback(async (data) => {
     const email = normalizeEmail(data.email)
     const password = data.password
+    const dob = data.dob?.trim() ?? ""
+    const age = computeAge(dob)
+    const customCardId = data.cardId?.trim() ?? ""
     if (!email || !password) return { ok: false, error: "Email and password are required." }
+    if (!dob || age === null || age < 0) return { ok: false, error: "Enter a valid date of birth." }
     if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
+    if (customCardId && !/^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/i.test(customCardId)) {
+      return { ok: false, error: "Card ID must be LV-1000 through LV-3000." }
+    }
+    if (age < 18 && !data.parentalMasterKey) return { ok: false, error: "A Parental Master Key is required for accounts under 18." }
+    if (age < 18 && data.parentalMasterKey && !/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{10,64}$/.test(data.parentalMasterKey)) {
+      return { ok: false, error: "Use 10–64 characters with an uppercase letter, number, and symbol for the Parental Master Key." }
+    }
 
+    const masterKeySalt = age < 18 ? bytesToHex(crypto.getRandomValues(new Uint8Array(16))) : ""
+    const masterKeyHash = age < 18 ? await hashParentalKey(data.parentalMasterKey!, masterKeySalt) : ""
     const profile = normalizeUser({
       ...data,
       email,
@@ -438,6 +466,9 @@ export function useStore(): StoreApi {
             dob: profile.dob,
             blood_group: profile.bloodGroup,
             gender: profile.gender,
+            custom_card_id: customCardId ? customCardId.toUpperCase() : "",
+            parental_master_key_salt: masterKeySalt,
+            parental_master_key_hash: masterKeyHash,
             health_data_consent: true,
             consent_version: "2026-11-25",
           },
@@ -555,6 +586,17 @@ export function useStore(): StoreApi {
       return { ok: true, message: "Passkey added to this account." }
     } catch {
       return { ok: false, error: "Passkey setup is unavailable. Enable Passkeys in Supabase Auth settings and try again." }
+    }
+  }, [])
+
+  const verifyParentalMasterKey: StoreApi["verifyParentalMasterKey"] = useCallback(async (key) => {
+    const { data: { user }, error } = await supabase.auth.getUser()
+    if (error || !user || typeof user.user_metadata?.parental_master_key_salt !== "string" || typeof user.user_metadata?.parental_master_key_hash !== "string") return false
+    try {
+      const candidate = await hashParentalKey(key, user.user_metadata.parental_master_key_salt)
+      return candidate === user.user_metadata.parental_master_key_hash
+    } catch {
+      return false
     }
   }, [])
 
@@ -736,6 +778,7 @@ export function useStore(): StoreApi {
     loginByCard,
     loginWithPasskey,
     registerPasskey,
+    verifyParentalMasterKey,
     getUserByCardId,
     requestPasswordReset,
   getDependentByEmail,

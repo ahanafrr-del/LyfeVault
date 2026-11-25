@@ -18,6 +18,7 @@ import { Departments } from "@/components/medivault/departments"
 import { DependentsDirectory } from "@/components/medivault/dependents-directory"
 import { DoctorUpload } from "@/components/medivault/doctor-upload"
 import { ProfileScreen } from "@/components/medivault/profile-screen"
+import { ParentalMasterAccess } from "@/components/medivault/parental-master-access"
 import { ClinicalMode } from "@/components/medivault/clinical-mode"
 import type { PractitionerSession } from "@/components/medivault/practitioner-scan"
 import { supabase } from "@/lib/supabase"
@@ -160,7 +161,8 @@ export default function Page() {
 
     return (
       <div className="flex h-full flex-col">
-        <div className="relative h-full flex-1 overflow-hidden">
+        {minor && <ParentalMasterAccess store={store} unlocked={minorUnlocked} onChange={setMinorUnlocked} />}
+        <div className="relative min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full">
             <div className="min-h-0 flex-1 overflow-y-auto">
               {tab === "home" &&
@@ -169,6 +171,7 @@ export default function Page() {
                   <MinorDashboard
                     store={store}
                     user={user}
+                    unlocked={minorUnlocked}
                     onNotifications={() => setTab("notifications")}
                     onEditModeChange={setMinorUnlocked}
                   />
@@ -180,9 +183,9 @@ export default function Page() {
                   />
                 ))}
               {tab === "timeline" && <Timeline user={user} showBack={false} />}
-              {tab === "insurance" && <InsuranceSection />}
+              {tab === "insurance" && <InsuranceSection readOnly={minor && !minorUnlocked} />}
               {tab === "emergency" && <EmergencyView profile={user} onBack={() => setTab("home")} />}
-              {tab === "privacy" && <PrivacySection onLogout={handleLogout} />}
+              {tab === "privacy" && <PrivacySection onLogout={handleLogout} readOnly={minor && !minorUnlocked} />}
               {tab === "notifications" && (
                 <div className="flex h-full flex-col bg-secondary">
                   <ScreenHeader title="Alerts" subtitle="Reminders & updates" />
@@ -194,7 +197,7 @@ export default function Page() {
                 </div>
               )}
               {tab === "profile" && (
-                <ProfileScreen store={store} user={user} onLogout={handleLogout} onPrivacy={() => setTab("privacy")} />
+                <ProfileScreen store={store} user={user} unlocked={minorUnlocked} onLogout={handleLogout} onPrivacy={() => setTab("privacy")} />
               )}
             </div>
           </div>
@@ -224,7 +227,7 @@ export default function Page() {
             onNavigate={setTab}
             onLogout={handleLogout}
             onAdd={() => setOverlay("upload")}
-            showAdd={!minor || (minorUnlocked && tab === "home")}
+            showAdd={!minor || minorUnlocked}
           >
             {renderPhoneContent()}
           </AppShell>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import {
   Bell,
   Lock,
@@ -21,7 +21,6 @@ import {
 } from "lucide-react"
 import { ModalShell } from "./shared"
 import { computeAge, uid, BLOOD_GROUPS, type EmergencyContact, type StoreApi, type UserProfile } from "@/lib/store"
-import { supabase } from "@/lib/supabase"
 
 type Draft = {
   bloodGroup: string
@@ -53,12 +52,14 @@ export function MinorDashboard({
   user,
   onNotifications,
   onEditModeChange,
+  unlocked,
 }: {
   store: StoreApi
   user: UserProfile
   onNotifications: () => void
   /** Notifies the parent shell when parental edit mode toggles, so it can show the upload FAB. */
   onEditModeChange?: (unlocked: boolean) => void
+  unlocked?: boolean
 }) {
   const firstName = user.name.split(" ")[0] || "there"
   const age = computeAge(user.dob)
@@ -71,21 +72,11 @@ export function MinorDashboard({
         .toUpperCase()
     : "U"
 
-  // Parental override state. The 4-digit code lives on the dependent record that a
-  // guardian created when linking this child's login email.
-  const [linkedDependent, setLinkedDependent] = useState<Awaited<ReturnType<StoreApi["getDependentByEmail"]>>>(null)
-  const getDependentByEmail = store.getDependentByEmail
-  useEffect(() => {
-    let active = true
-    void getDependentByEmail(user.email).then((dependent) => {
-      if (active) setLinkedDependent(dependent)
-    })
-    return () => { active = false }
-  }, [getDependentByEmail, user.email])
   const [pinOpen, setPinOpen] = useState(false)
   const [pin, setPin] = useState("")
   const [pinError, setPinError] = useState<string | null>(null)
   const [editMode, setEditMode] = useState(false)
+  const activeEditMode = unlocked ?? editMode
   const [draft, setDraft] = useState<Draft>(() => toDraft(user))
   const [savedFlash, setSavedFlash] = useState(false)
 
@@ -96,16 +87,9 @@ export function MinorDashboard({
   }
 
   async function verifyPin() {
-    if (!linkedDependent) {
-      setPinError("No guardian-linked dependent record was found.")
-      return
-    }
-    const { data: valid, error } = await supabase.rpc("verify_dependent_secret_code", {
-      p_dependent_id: linkedDependent.id,
-      p_secret_code: pin,
-    })
-    if (error || !valid) {
-      setPinError("Incorrect code. Access stays locked in read-only mode.")
+    const valid = await store.verifyParentalMasterKey(pin)
+    if (!valid) {
+      setPinError("Incorrect key. Access stays locked in read-only mode.")
       return
     }
     setDraft(toDraft(user))
@@ -164,7 +148,7 @@ export function MinorDashboard({
           <p className="text-xs text-muted-foreground">Hello,</p>
           <div className="flex items-center gap-2">
             <p className="truncate text-lg font-bold text-foreground">{firstName}</p>
-            {editMode ? (
+            {activeEditMode ? (
               <span className="flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
                 <Unlock className="h-3 w-3" />
                 Parental edit
@@ -198,9 +182,9 @@ export function MinorDashboard({
               <ShieldCheck className="h-6 w-6" />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-bold">{editMode ? "Guardian Access Unlocked" : "Safe Mode Active"}</p>
+              <p className="text-sm font-bold">{activeEditMode ? "Guardian Access Unlocked" : "Safe Mode Active"}</p>
               <p className="text-xs text-primary-foreground/80">
-                {editMode ? (
+                {activeEditMode ? (
                   <>Edit and save records in real-time</>
                 ) : (
                   <>
@@ -215,7 +199,7 @@ export function MinorDashboard({
         </div>
 
         {/* Parental Master Access control */}
-        {editMode ? (
+        {activeEditMode ? (
           <div className="rounded-2xl bg-foreground p-4 text-background shadow-lg">
             <div className="flex items-center gap-2">
               <Unlock className="h-5 w-5" />
@@ -260,7 +244,7 @@ export function MinorDashboard({
           </button>
         )}
 
-        {editMode ? (
+        {activeEditMode ? (
           <>
             {/* Medical snapshot (blood group) */}
             <section className="rounded-2xl bg-card p-4 shadow-sm">
@@ -433,8 +417,8 @@ export function MinorDashboard({
 
       {pinOpen && (
         <ModalShell
-          title="Parental Master Access"
-          subtitle="Enter the 5-12 character secret code"
+          title="Parental Master Key"
+          subtitle="Enter the 10–64 character key"
           headerAccent
           onClose={() => setPinOpen(false)}
         >
@@ -449,25 +433,25 @@ export function MinorDashboard({
 
             <label className="block">
               <span className="mb-1 block text-xs font-semibold text-muted-foreground">
-                Parental Secret Code
+                Parental Master Key
               </span>
               <div className="relative">
                 <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
                   <KeyRound className="h-4 w-4" />
                 </span>
                 <input
-                  type="text"
-                  maxLength={12}
+                  type="password"
+                  maxLength={64}
                   autoFocus
                   className={`${SELECT} pl-10 tracking-widest`}
-                  placeholder="Secret code"
+                  placeholder="Master Key"
                   value={pin}
                   onChange={(e) => {
-                    setPin(e.target.value.slice(0, 12))
+                    setPin(e.target.value.slice(0, 64))
                     setPinError(null)
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.nativeEvent.isComposing) verifyPin()
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229) verifyPin()
                   }}
                 />
               </div>

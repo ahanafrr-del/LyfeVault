@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { Download, FileJson2, LockKeyhole, ShieldCheck, Trash2 } from "lucide-react"
+import { FileJson2, LockKeyhole, ShieldCheck, Trash2 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { ModalShell } from "./shared"
 
@@ -47,14 +47,14 @@ const ACTION_LABELS: Record<string, string> = {
   account_deletion_requested: "Account deletion requested",
 }
 
-export function PrivacySection({ onLogout }: { onLogout: () => void }) {
+export function PrivacySection({ onLogout, readOnly = false }: { onLogout: () => void; readOnly?: boolean }) {
   const { data, error, isLoading, mutate } = useSWR("lyfevault-privacy", loadPrivacy)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   async function saveSettings(patch: Partial<Omit<PrivacySettings, "userId">>, action: "settings_update" | "consent_withdrawn" = "settings_update") {
-    if (!data?.settings) return
+    if (readOnly || !data?.settings) return
     setBusy(true)
     setNotice(null)
     const updated = { ...data.settings, ...patch }
@@ -159,9 +159,9 @@ export function PrivacySection({ onLogout }: { onLogout: () => void }) {
         <div className="flex flex-col gap-6">
           <section className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">
             <div className="mb-4 flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LockKeyhole className="size-5" /></span><div><h2 className="font-bold text-foreground">Privacy settings</h2><p className="text-xs text-muted-foreground">Your choices are stored in your protected account settings.</p></div></div>
-            <SettingRow title="Mask sensitive insurance numbers by default" description="Policy, member, and group numbers are hidden until you reveal them." checked={settings?.mask_sensitive_fields ?? true} disabled={busy} onChange={(checked) => void saveSettings({ mask_sensitive_fields: checked })} />
-            <SettingRow title="Share an insurance summary with verified practitioners" description="Only the active plan summary is shared; identifiers stay masked. Turn off any time." checked={settings?.practitioner_insurance_visible ?? false} disabled={busy || !canWithdraw} onChange={(checked) => void saveSettings({ practitioner_insurance_visible: checked })} />
-            <div className="mt-4 rounded-2xl bg-secondary p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-foreground">Health-data consent</p><p className="mt-1 text-xs text-muted-foreground">{canWithdraw ? "Consent is active for your medical passport and emergency access." : "Consent has been withdrawn; optional practitioner insurance visibility is disabled."}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${canWithdraw ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground"}`}>{canWithdraw ? "Active" : "Withdrawn"}</span></div>{canWithdraw && <button type="button" disabled={busy} onClick={() => void saveSettings({ consent_active: false, practitioner_insurance_visible: false }, "consent_withdrawn")} className="mt-3 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-semibold text-destructive disabled:opacity-50">Withdraw consent</button>}</div>
+            <SettingRow title="Mask sensitive insurance numbers by default" description="Policy, member, and group numbers are hidden until you reveal them." checked={settings?.mask_sensitive_fields ?? true} disabled={busy || readOnly} onChange={(checked) => void saveSettings({ mask_sensitive_fields: checked })} />
+            <SettingRow title="Share an insurance summary with verified practitioners" description="Only the active plan summary is shared; identifiers stay masked. Turn off any time." checked={settings?.practitioner_insurance_visible ?? false} disabled={busy || readOnly || !canWithdraw} onChange={(checked) => void saveSettings({ practitioner_insurance_visible: checked })} />
+            <div className="mt-4 rounded-2xl bg-secondary p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-foreground">Health-data consent</p><p className="mt-1 text-xs text-muted-foreground">{canWithdraw ? "Consent is active for your medical passport and emergency access." : "Consent has been withdrawn; optional practitioner insurance visibility is disabled."}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${canWithdraw ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground"}`}>{canWithdraw ? "Active" : "Withdrawn"}</span></div>{canWithdraw && !readOnly && <button type="button" disabled={busy} onClick={() => void saveSettings({ consent_active: false, practitioner_insurance_visible: false }, "consent_withdrawn")} className="mt-3 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-semibold text-destructive disabled:opacity-50">Withdraw consent</button>}</div>
           </section>
 
           <section className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">
@@ -171,7 +171,7 @@ export function PrivacySection({ onLogout }: { onLogout: () => void }) {
 
           <section className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">
             <h2 className="font-bold text-foreground">Your account data</h2><p className="mt-1 text-sm text-muted-foreground">Export a JSON copy of account, medical, insurance, dependent, and privacy records, or permanently delete your account and associated records.</p>
-            <div className="mt-4 flex flex-wrap gap-3"><button type="button" disabled={busy} onClick={() => void exportData()} className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground disabled:opacity-50"><FileJson2 className="size-4" /> Export JSON</button><button type="button" disabled={busy} onClick={() => setConfirmDelete(true)} className="inline-flex items-center gap-2 rounded-xl bg-destructive px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"><Trash2 className="size-4" /> Delete account</button></div>
+            <div className="mt-4 flex flex-wrap gap-3"><button type="button" disabled={busy} onClick={() => void exportData()} className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground disabled:opacity-50"><FileJson2 className="size-4" /> Export JSON</button><button type="button" disabled={busy || readOnly} onClick={() => setConfirmDelete(true)} className="inline-flex items-center gap-2 rounded-xl bg-destructive px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"><Trash2 className="size-4" /> Delete account</button></div>
           </section>
 
           <section className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6"><h2 className="font-bold text-foreground">Sign out of all devices</h2><p className="mt-1 text-sm text-muted-foreground">This revokes active sessions across your devices.</p><button type="button" disabled={busy} onClick={async () => { await supabase.auth.signOut({ scope: "global" }); onLogout() }} className="mt-4 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground disabled:opacity-50">Sign out everywhere</button></section>
