@@ -58,7 +58,7 @@ function maskValue(value: string): string {
   return value ? `••••••${value.slice(-4)}` : "Not provided"
 }
 
-export function InsuranceSection() {
+export function InsuranceSection({ readOnly = false }: { readOnly?: boolean }) {
   const { data, error, isLoading, mutate } = useSWR("lyfevault-insurance", loadInsurance)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<InsuranceDraft | null>(null)
@@ -82,9 +82,9 @@ export function InsuranceSection() {
     valid_until: policy.valid_until ?? "",
     is_active: policy.is_active,
   } : blankDraft)
-  const isEditing = editing || !policy
+  const isEditing = !readOnly && (editing || !policy)
   const maskedByDefault = data?.maskedByDefault ?? true
-  const reveal = revealOverride ?? !maskedByDefault
+  const reveal = !readOnly && (revealOverride ?? !maskedByDefault)
 
   function startEditing() {
     setDraft({ ...form })
@@ -181,7 +181,7 @@ export function InsuranceSection() {
           <h1 className="mt-1 text-2xl font-bold text-foreground sm:text-3xl">Health insurance</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">Keep your policy details and E-card together. Sensitive identifiers are masked by default and are never saved in browser storage.</p>
         </div>
-        {policy && !isEditing && <button type="button" onClick={startEditing} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground"><Pencil className="size-4" /> Edit policy</button>}
+        {policy && !isEditing && !readOnly && <button type="button" onClick={startEditing} className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground"><Pencil className="size-4" /> Edit policy</button>}
       </header>
 
       {error && <p role="alert" className="mb-4 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{error.message}</p>}
@@ -203,11 +203,11 @@ export function InsuranceSection() {
             {policy.helpline_phone && <div className="rounded-2xl bg-secondary p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Member helpline</p><a href={`tel:${policy.helpline_phone}`} className="mt-2 inline-flex text-base font-bold text-primary underline underline-offset-2">{policy.helpline_phone}</a></div>}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4 sm:px-7">
-            <button type="button" onClick={() => void toggleReveal()} aria-pressed={reveal} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm font-semibold text-foreground">{reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}{reveal ? "Hide sensitive numbers" : "Reveal sensitive numbers"}</button>
+            {!readOnly && <button type="button" onClick={() => void toggleReveal()} aria-pressed={reveal} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm font-semibold text-foreground">{reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}{reveal ? "Hide sensitive numbers" : "Reveal sensitive numbers"}</button>}
             {policy.ecard_path && <button type="button" onClick={() => void viewEcard()} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-accent-foreground"><FileText className="size-4" /> View E-card</button>}
           </div>
         </article>
-      ) : (
+      ) : isEditing ? (
         <form onSubmit={saveInsurance} className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-7">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Insurance provider *"><input required maxLength={120} value={form.provider_name} onChange={(e) => setDraft({ ...form, provider_name: e.target.value })} className={inputClass} placeholder="Provider name" /></Field>
@@ -226,7 +226,7 @@ export function InsuranceSection() {
           <p className="mt-2 text-xs text-muted-foreground">E-cards are stored in a private Supabase bucket and opened with a short-lived signed link.</p>
           <div className="mt-6 flex flex-wrap justify-end gap-3"><button type="button" onClick={() => { setEditing(false); setDraft(null); setEcard(null) }} className="rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-foreground">Cancel</button><button type="submit" disabled={saving} className="rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-60">{saving ? "Saving…" : "Save policy"}</button></div>
         </form>
-      )}
+      ) : null}
       {!policy && !isEditing && <div className="rounded-3xl border border-dashed border-border bg-card p-8 text-center"><ShieldCheck className="mx-auto size-9 text-primary" /><p className="mt-3 font-semibold text-foreground">No insurance details added</p><p className="mt-1 text-sm text-muted-foreground">Add a policy to keep your E-card and coverage information available in emergencies.</p></div>}
       {viewer && <FileViewer fileName={viewer.name} fileUrl={viewer.url} onClose={() => setViewer(null)} />}
     </section>

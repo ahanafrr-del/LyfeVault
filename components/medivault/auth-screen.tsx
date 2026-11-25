@@ -1,13 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import { AlertCircle, Ambulance, Lock, Mail, User, Tag, Stethoscope, Fingerprint } from "lucide-react"
+import { AlertCircle, Ambulance, CalendarDays, KeyRound, Lock, Mail, User, Tag, Stethoscope, Fingerprint } from "lucide-react"
 import { Logo } from "./shared"
 import { PractitionerScan, type PractitionerSession } from "./practitioner-scan"
 import { EmergencyLookupModal } from "./emergency-lookup"
 import { ForgotPasswordModal } from "./forgot-password"
 import { LegalFooter, LegalLinks } from "./legal"
-import type { StoreApi, UserProfile } from "@/lib/store"
+import { computeAge, type StoreApi, type UserProfile } from "@/lib/store"
 
 export function AuthScreen({
   store,
@@ -33,7 +33,11 @@ export function AuthScreen({
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [cardId, setCardId] = useState("")
+  const [customCardId, setCustomCardId] = useState("")
   const [name, setName] = useState("")
+  const [dob, setDob] = useState("")
+  const [parentalMasterKey, setParentalMasterKey] = useState("")
+  const age = computeAge(dob)
   /** Required health-data consent is submitted to Supabase with the account registration. */
   const [agreeTerms, setAgreeTerms] = useState(false)
 
@@ -55,10 +59,19 @@ export function AuthScreen({
         if (!res.ok) return setError(res.error ?? "Login failed.")
         onAuthed("login")
       } else {
-        if (!name.trim() || !email.trim() || !password) return setError("Enter your name, email, and password.")
+        if (!name.trim() || !email.trim() || !password || !dob) return setError("Enter your name, date of birth, email, and password.")
+        if (customCardId && !/^(1000|1[0-9]{3}|2[0-9]{3}|3000)$/.test(customCardId)) return setError("Card ID must be from LV-1000 through LV-3000.")
+        if (age !== null && age < 18 && !parentalMasterKey) return setError("Set a Parental Master Key for this minor account.")
         if (!agreeTerms)
           return setError("Consent to the Privacy Policy and health-data processing is required to register.")
-        const res = await store.register({ name: name.trim(), email: email.trim(), password })
+        const res = await store.register({
+          name: name.trim(),
+          email: email.trim(),
+          password,
+          dob,
+          cardId: customCardId ? `LV-${customCardId}` : undefined,
+          parentalMasterKey: age !== null && age < 18 ? parentalMasterKey : undefined,
+        })
         if (!res.ok) return setError(res.error ?? "Sign up failed.")
         if (res.pendingConfirmation) {
           setStatusMessage(res.message ?? "Confirm your email before signing in.")
@@ -127,6 +140,52 @@ export function AuthScreen({
               onChange={(e) => setName(e.target.value)}
             />
           </Field>
+        )}
+
+        {mode === "signup" && (
+          <>
+            <Field icon={<CalendarDays className="h-4 w-4" />}>
+              <input
+                type="date"
+                className={inputClass}
+                aria-label="Date of birth"
+                autoComplete="bday"
+                max={new Date().toISOString().slice(0, 10)}
+                required
+                value={dob}
+                onChange={(e) => setDob(e.target.value)}
+              />
+            </Field>
+            {dob && age !== null && <p className="-mt-2 px-1 text-xs text-muted-foreground">Age: <span className="font-semibold text-foreground">{age} years</span> · {age < 18 ? "Minor account · read-only by default" : "Adult account · full access"}</p>}
+            <div className="flex items-center overflow-hidden rounded-xl border border-border bg-input focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+              <span className="border-r border-border px-4 py-3 text-sm font-bold tracking-wide text-primary">LV-</span>
+              <input
+                className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm tracking-[0.18em] text-foreground outline-none placeholder:tracking-normal"
+                aria-label="Optional custom Card ID number"
+                inputMode="numeric"
+                pattern="(1000|1[0-9]{3}|2[0-9]{3}|3000)"
+                maxLength={4}
+                placeholder="Optional · auto-assigned if blank"
+                value={customCardId}
+                onChange={(e) => setCustomCardId(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              />
+            </div>
+            {age !== null && age < 18 && (
+              <Field icon={<KeyRound className="h-4 w-4" />}>
+                <input
+                  type="password"
+                  className={inputClass}
+                  placeholder="Parental Master Key"
+                  autoComplete="new-password"
+                  minLength={10}
+                  required
+                  value={parentalMasterKey}
+                  onChange={(e) => setParentalMasterKey(e.target.value)}
+                />
+              </Field>
+            )}
+            {age !== null && age < 18 && <p className="-mt-2 px-1 text-xs leading-relaxed text-muted-foreground">Use 10+ characters with an uppercase letter, number, and symbol. Only a salted password hash is stored; the key itself is never saved.</p>}
+          </>
         )}
 
         {/* Login method toggle (email vs Card/Tag ID) */}
