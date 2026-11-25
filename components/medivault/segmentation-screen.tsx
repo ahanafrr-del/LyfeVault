@@ -1,18 +1,44 @@
 "use client"
 
+import { useState } from "react"
 import { Lock, Unlock, ArrowRight, ShieldCheck, Eye } from "lucide-react"
-import { computeAge, isChildProfile, type UserProfile } from "@/lib/store"
+import { computeAge, isChildProfile, type StoreApi, type UserProfile } from "@/lib/store"
 
 export function SegmentationScreen({
   user,
+  store,
   onProceed,
 }: {
   user: UserProfile
+  store: StoreApi
   onProceed: () => void
 }) {
-  const minor = isChildProfile(user)
-  const age = computeAge(user.dob)
+  const [dob, setDob] = useState(user.dob)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const needsBirthDate = !user.dob
+  const age = computeAge(user.dob || dob)
+  const minor = isChildProfile(user) || (!user.dob && age !== null && age < 18)
   const firstName = user.name.split(" ")[0] || "there"
+
+  async function continueToDashboard() {
+    if (needsBirthDate) {
+      const selectedAge = computeAge(dob)
+      if (selectedAge === null || selectedAge < 0) {
+        setError("Enter a valid date of birth so we can apply the right account protections.")
+        return
+      }
+      setSaving(true)
+      try {
+        await store.updateProfile({ dob })
+      } catch {
+        setError("Your birth date could not be saved. Please try again.")
+        setSaving(false)
+        return
+      }
+    }
+    onProceed()
+  }
 
   return (
     <div className="flex h-full flex-col items-center justify-center bg-primary px-6 text-center text-primary-foreground">
@@ -33,7 +59,14 @@ export function SegmentationScreen({
           Account verified, {firstName}
         </p>
 
-        {minor ? (
+        {needsBirthDate ? (
+          <>
+            <h1 className="mt-2 text-xl font-black text-foreground text-balance">Set up age-appropriate access</h1>
+            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">Add your date of birth so LyfeVault can apply adult or guardian protections to this health profile.</p>
+            <label className="mt-4 block text-left text-xs font-semibold text-muted-foreground">Date of birth<input type="date" required max={new Date().toISOString().slice(0, 10)} value={dob} onChange={(event) => { setDob(event.target.value); setError(null) }} className="mt-1.5 w-full rounded-xl border border-border bg-input px-3 py-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" /></label>
+            {error && <p role="alert" className="mt-3 text-left text-xs text-destructive">{error}</p>}
+          </>
+        ) : minor ? (
           <>
             <h1 className="mt-1 text-xl font-black text-foreground text-balance">
               Minor Security Profile Activated
@@ -65,10 +98,11 @@ export function SegmentationScreen({
 
         <button
           type="button"
-          onClick={onProceed}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3.5 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/25 transition hover:brightness-110"
+          onClick={() => void continueToDashboard()}
+          disabled={saving || (needsBirthDate && !dob)}
+          className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3.5 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/25 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Continue to {minor ? "Safe Mode" : "Dashboard"}
+          {saving ? "Saving…" : needsBirthDate ? "Save and continue" : `Continue to ${minor ? "Safe Mode" : "Dashboard"}`}
           <ArrowRight className="h-4 w-4" />
         </button>
       </div>

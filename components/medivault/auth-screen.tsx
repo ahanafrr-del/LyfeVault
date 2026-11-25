@@ -1,15 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import { AlertCircle, Ambulance, Lock, Mail, Calendar, User, Droplet, Tag, Stethoscope } from "lucide-react"
+import { AlertCircle, Ambulance, Lock, Mail, User, Tag, Stethoscope, Fingerprint } from "lucide-react"
 import { Logo } from "./shared"
 import { PractitionerScan, type PractitionerSession } from "./practitioner-scan"
 import { EmergencyLookupModal } from "./emergency-lookup"
 import { ForgotPasswordModal } from "./forgot-password"
 import { LegalFooter, LegalLinks } from "./legal"
 import type { StoreApi, UserProfile } from "@/lib/store"
-
-const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
 
 export function AuthScreen({
   store,
@@ -36,11 +34,7 @@ export function AuthScreen({
   const [password, setPassword] = useState("")
   const [cardId, setCardId] = useState("")
   const [name, setName] = useState("")
-  const [dob, setDob] = useState("")
-  const [gender, setGender] = useState("")
-  const [bloodGroup, setBloodGroup] = useState("")
-  const [signupCardId, setSignupCardId] = useState("")
-  /** Mandatory consent to Terms of Service + Privacy Policy required before registration. */
+  /** Required health-data consent is submitted to Supabase with the account registration. */
   const [agreeTerms, setAgreeTerms] = useState(false)
 
   const [scanOpen, setScanOpen] = useState(false)
@@ -56,15 +50,15 @@ export function AuthScreen({
     try {
       if (mode === "login") {
         const res = loginMethod === "card"
-          ? await store.loginByCard(cardId, password)
+          ? await store.loginByCard(`LV-${cardId.trim()}`, password)
           : await store.login(email, password)
         if (!res.ok) return setError(res.error ?? "Login failed.")
         onAuthed("login")
       } else {
-        if (!name.trim() || !dob || !bloodGroup) return setError("Please complete all sign-up fields.")
+        if (!name.trim() || !email.trim() || !password) return setError("Enter your name, email, and password.")
         if (!agreeTerms)
-          return setError("You must agree to the Terms of Service and Privacy Policy to register.")
-        const res = await store.register({ name, dob, bloodGroup, gender, email: email.trim(), password, cardId: signupCardId.trim() })
+          return setError("Consent to the Privacy Policy and health-data processing is required to register.")
+        const res = await store.register({ name: name.trim(), email: email.trim(), password })
         if (!res.ok) return setError(res.error ?? "Sign up failed.")
         if (res.pendingConfirmation) {
           setStatusMessage(res.message ?? "Confirm your email before signing in.")
@@ -123,63 +117,16 @@ export function AuthScreen({
 
       <form onSubmit={submit} className="mx-auto mt-6 flex w-full max-w-sm flex-col gap-3">
         {mode === "signup" && (
-          <>
-            <Field icon={<User className="h-4 w-4" />}>
-              <input
-                className={inputClass}
-                placeholder="Full name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field icon={<Calendar className="h-4 w-4" />}>
-                <input
-                  type="date"
-                  className={inputClass}
-                  value={dob}
-                  onChange={(e) => setDob(e.target.value)}
-                />
-              </Field>
-              <Field icon={<Droplet className="h-4 w-4" />}>
-                <select
-                  className={`${inputClass} appearance-none`}
-                  value={bloodGroup}
-                  onChange={(e) => setBloodGroup(e.target.value)}
-                >
-                  <option value="">Blood</option>
-                  {BLOOD_GROUPS.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <Field icon={<User className="h-4 w-4" />}>
-              <select
-                className={`${inputClass} appearance-none`}
-                value={gender}
-                onChange={(e) => setGender(e.target.value)}
-              >
-                <option value="">Gender</option>
-                <option>Male</option>
-                <option>Female</option>
-                <option>Other</option>
-              </select>
-            </Field>
-            <Field icon={<Tag className="h-4 w-4" />}>
-              <input
-                className={inputClass}
-                placeholder="Card/Tag ID Number (optional)"
-                value={signupCardId}
-                onChange={(e) => setSignupCardId(e.target.value)}
-              />
-            </Field>
-            <p className="-mt-1 pl-1 text-[11px] leading-relaxed text-muted-foreground">
-              Card/Tag ID is optional. Card-based login and emergency lookup require a registered ID.
-            </p>
-          </>
+          <Field icon={<User className="h-4 w-4" />}>
+            <input
+              className={inputClass}
+              placeholder="Full name"
+              autoComplete="name"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </Field>
         )}
 
         {/* Login method toggle (email vs Card/Tag ID) */}
@@ -205,14 +152,21 @@ export function AuthScreen({
         )}
 
         {mode === "login" && loginMethod === "card" ? (
-          <Field icon={<Tag className="h-4 w-4" />}>
+          <div className="flex items-center overflow-hidden rounded-xl border border-border bg-input focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+            <span className="border-r border-border px-4 py-3 text-sm font-bold tracking-wide text-primary">LV-</span>
             <input
-              className={inputClass}
-              placeholder="Card/Tag ID Number"
+              className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm tracking-[0.18em] text-foreground outline-none"
+              aria-label="Four-digit Card ID"
+              autoComplete="username"
+              inputMode="numeric"
+              pattern="(1000|1[0-9]{3}|2[0-9]{3}|3000)"
+              maxLength={4}
+              placeholder="1000"
+              required
               value={cardId}
-              onChange={(e) => setCardId(e.target.value)}
+              onChange={(e) => setCardId(e.target.value.replace(/\D/g, "").slice(0, 4))}
             />
-          </Field>
+          </div>
         ) : (
           <Field icon={<Mail className="h-4 w-4" />}>
             <input
@@ -253,6 +207,25 @@ export function AuthScreen({
           </div>
         )}
 
+        {mode === "login" && (
+          <button
+            type="button"
+            onClick={async () => {
+              setError(null)
+              setIsSubmitting(true)
+              const result = await store.loginWithPasskey()
+              setIsSubmitting(false)
+              if (!result.ok) setError(result.error ?? "Passkey sign-in failed.")
+              else onAuthed("login")
+            }}
+            disabled={isSubmitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-primary/25 bg-card py-3 text-sm font-semibold text-primary transition hover:bg-primary/5 disabled:opacity-60"
+          >
+            <Fingerprint className="h-5 w-5" />
+            Sign in with a passkey
+          </button>
+        )}
+
         {mode === "signup" && (
           <label className="mt-1 flex items-start gap-2.5 rounded-xl bg-card px-3 py-2.5 text-xs leading-relaxed text-muted-foreground shadow-sm">
             <input
@@ -267,7 +240,7 @@ export function AuthScreen({
               className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
             />
             <span>
-              I agree to the <LegalLinks />.
+              I have read the <LegalLinks /> and consent to LyfeVault processing my health data to provide my medical passport and emergency access.
             </span>
           </label>
         )}

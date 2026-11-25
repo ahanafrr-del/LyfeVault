@@ -9,6 +9,7 @@ import {
   AlertCircle,
 } from "lucide-react"
 import { ModalShell } from "./shared"
+import { supabase } from "@/lib/supabase"
 import { QrCameraScanner } from "./qr-camera-scanner"
 import {
   getPilotRegistrationId,
@@ -34,6 +35,7 @@ export function DoctorUpload({
   const [clinic, setClinic] = useState("")
   const [notes, setNotes] = useState("")
   const [fileName, setFileName] = useState("")
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [license, setLicense] = useState("")
   const [verified, setVerified] = useState(false)
   const [officialQrUrl, setOfficialQrUrl] = useState<string | null>(null)
@@ -64,17 +66,48 @@ export function DoctorUpload({
       setError("The doctor's medical license must be verified before uploading.")
       return
     }
-    await store.addReport({
-      doctorName: doctorName.trim(),
-      specialization,
-      clinic: clinic.trim(),
-      date,
-      time,
-      licenseNumber: license,
-      fileName: fileName || "report.pdf",
-      notes: notes.trim(),
+    if (!selectedFile) {
+      setError("Choose a medical report file to upload.")
+      return
+    }
+    if (!["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(selectedFile.type) || selectedFile.size > 52_428_800) {
+      setError("Choose a PDF, JPG, PNG, or WEBP file no larger than 50 MB.")
+      return
+    }
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      setError("Sign in again before uploading a report.")
+      return
+    }
+    const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, "_")
+    const filePath = `patients/${user.id}/${crypto.randomUUID()}/${safeName}`
+    const { error: uploadError } = await supabase.storage.from("medical-reports").upload(filePath, selectedFile, {
+      contentType: selectedFile.type,
+      upsert: false,
     })
-    onDone()
+    if (uploadError) {
+      setError("The file could not be uploaded. Choose a supported file no larger than 50 MB.")
+      return
+    }
+
+    try {
+      await store.addReport({
+        doctorName: doctorName.trim(),
+        specialization,
+        clinic: clinic.trim(),
+        date,
+        time,
+        licenseNumber: license,
+        fileName: fileName || "report.pdf",
+        notes: notes.trim(),
+        filePath,
+      })
+      onDone()
+    } catch {
+      await supabase.storage.from("medical-reports").remove([filePath])
+      setError("The report details could not be saved. The uploaded file was removed.")
+    }
   }
 
   const inputClass =
@@ -155,7 +188,10 @@ export function DoctorUpload({
               e.preventDefault()
               setDragging(false)
               const f = e.dataTransfer.files?.[0]
-              if (f) setFileName(f.name)
+              if (f) {
+                setSelectedFile(f)
+                setFileName(f.name)
+              }
             }}
             className={`flex w-full flex-col items-center gap-2 rounded-xl border-2 border-dashed px-4 py-6 text-center transition ${
               dragging ? "border-accent bg-accent/5" : "border-border bg-input"
@@ -171,18 +207,22 @@ export function DoctorUpload({
               <>
                 <UploadCloud className="h-7 w-7 text-primary" />
                 <span className="text-sm font-medium text-foreground">Drag &amp; drop or tap to upload</span>
-                <span className="text-xs text-muted-foreground">PDF, JPG or PNG</span>
+                <span className="text-xs text-muted-foreground">PDF, JPG, PNG, or WEBP · up to 50 MB</span>
               </>
             )}
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,.jpg,.jpeg,.png"
-            className="hidden"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            aria-label="Choose medical report file"
+            className="sr-only"
             onChange={(e) => {
               const f = e.target.files?.[0]
-              if (f) setFileName(f.name)
+              if (f) {
+                setSelectedFile(f)
+                setFileName(f.name)
+              }
             }}
           />
         </div>

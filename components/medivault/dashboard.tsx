@@ -14,6 +14,7 @@ import {
   Droplet,
   Phone,
   Lock,
+  CreditCard,
 } from "lucide-react"
 import { computeAge, isChildProfile, type UserProfile } from "@/lib/store"
 
@@ -64,7 +65,7 @@ export function Dashboard({
   const dependentCount = (user.dependents ?? []).length
 
   return (
-    <div className="w-full bg-secondary pb-10">
+    <div className="mx-auto w-full max-w-6xl bg-secondary pb-10">
       {/* Top bar */}
       <div className="sticky top-0 z-10 flex items-center gap-3 bg-secondary/90 px-4 py-3.5 backdrop-blur-md">
         <div className="min-w-0 flex-1">
@@ -129,6 +130,14 @@ export function Dashboard({
               {age} yrs{user.gender ? ` \u00b7 ${user.gender}` : ""}
             </p>
           )}
+        </div>
+      </div>
+
+      <div className="mt-4 px-4">
+        <div className="flex items-center gap-3 rounded-2xl border border-primary/15 bg-card px-4 py-3.5 shadow-sm">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><CreditCard className="size-5" /></span>
+          <div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Your LyfeVault Card ID</p><p className="mt-0.5 font-mono text-xl font-black tracking-[0.12em] text-primary">{user.cardId || "Assigning…"}</p></div>
+          <span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-bold text-accent">Emergency ready</span>
         </div>
       </div>
 

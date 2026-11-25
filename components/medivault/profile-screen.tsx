@@ -7,6 +7,7 @@ import {
   Save,
   Pencil,
   ShieldCheck,
+  Fingerprint,
   Check,
   User as UserIcon,
   Calendar,
@@ -55,16 +56,20 @@ export function ProfileScreen({
   store,
   user,
   onLogout,
+  onPrivacy,
 }: {
   store: StoreApi
   user: UserProfile
   onLogout: () => void
+  onPrivacy: () => void
 }) {
   const readOnly = isChildProfile(user)
   const age = computeAge(user.dob)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Draft>(() => toDraft(user))
   const [savedFlash, setSavedFlash] = useState(false)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const [passkeyMessage, setPasskeyMessage] = useState<string | null>(null)
 
   const initials = user.name
     ? user.name
@@ -78,6 +83,13 @@ export function ProfileScreen({
   function startEdit() {
     setDraft(toDraft(user))
     setEditing(true)
+  }
+
+  async function addPasskey() {
+    setPasskeyBusy(true)
+    const result = await store.registerPasskey()
+    setPasskeyMessage(result.ok ? result.message ?? "Passkey added." : result.error ?? "Passkey setup failed.")
+    setPasskeyBusy(false)
   }
 
   function cancelEdit() {
@@ -300,6 +312,17 @@ export function ProfileScreen({
             </ProfileField>
           </div>
         </section>
+
+        {!readOnly && (
+          <section className="rounded-2xl bg-card p-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Fingerprint className="size-5" /></span>
+              <div className="min-w-0 flex-1"><h2 className="text-sm font-bold text-foreground">Passkey sign-in</h2><p className="mt-1 text-xs text-muted-foreground">Add Face ID, Touch ID, or your device screen-lock passkey. Your biometric stays on your device.</p>{passkeyMessage && <p role="status" className="mt-2 text-xs text-primary">{passkeyMessage}</p>}<button type="button" disabled={passkeyBusy} onClick={() => void addPasskey()} className="mt-3 rounded-lg border border-primary/30 px-3 py-2 text-xs font-semibold text-primary disabled:opacity-50">{passkeyBusy ? "Setting up…" : "Add a passkey"}</button></div>
+            </div>
+          </section>
+        )}
+
+        <button type="button" onClick={onPrivacy} className="flex w-full items-center justify-between rounded-2xl bg-card p-4 text-left shadow-sm transition hover:bg-primary/5"><span><span className="block text-sm font-bold text-foreground">Privacy &amp; Policy</span><span className="mt-1 block text-xs text-muted-foreground">Manage consent, sharing, and data export</span></span><ShieldCheck className="size-5 text-primary" /></button>
 
         {/* Save action for adults in edit mode */}
         {active && (
