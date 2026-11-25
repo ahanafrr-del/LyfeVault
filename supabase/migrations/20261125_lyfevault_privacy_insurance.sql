@@ -17,17 +17,40 @@ with duplicates as (
   where card_id ~ '^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$'
 ),
 needs_id as (
-  select p.ctid
+  select p.ctid,
+         row_number() over (order by p.auth_user_id nulls last, p.email, p.ctid) as row_number
   from public.profiles p
   left join duplicates d on d.ctid = p.ctid
   where p.card_id is null
      or p.card_id !~ '^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$'
      or d.duplicate_number > 1
+),
+available_ids as (
+  select gs.card_number,
+         row_number() over (order by gs.card_number) as row_number
+  from generate_series(1000, 3000) as gs(card_number)
+  where not exists (
+    select 1 from public.profiles p where p.card_id = 'LV-' || gs.card_number::text
+  )
 )
 update public.profiles p
-set card_id = 'LV-' || nextval('public.lyfevault_card_id_seq')::text
+set card_id = 'LV-' || a.card_number::text
 from needs_id n
+join available_ids a on a.row_number = n.row_number
 where p.ctid = n.ctid;
+
+do $$
+begin
+  if exists (
+    select 1 from public.profiles
+    where card_id is null or card_id !~ '^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$'
+  ) or exists (
+    select 1 from public.profiles group by card_id having count(*) > 1
+  ) then
+    raise exception 'Unable to assign unique LV-1000 to LV-3000 Card IDs to every existing profile';
+  end if;
+end;
+$$;
 
 update public.profiles p
 set auth_user_id = u.id
@@ -35,10 +58,36 @@ from auth.users u
 where p.auth_user_id is null and lower(p.email) = lower(u.email);
 
 create unique index if not exists profiles_card_id_unique on public.profiles(card_id);
-revoke insert, update on public.profiles from authenticated;
-grant select on public.profiles to authenticated;
+create unique index if not exists profiles_auth_user_id_unique on public.profiles(auth_user_id);
+insert into public.profiles (
+  auth_user_id, email, name, dob, blood_group, gender, card_id,
+  allergies, conditions, medications, contacts, updated_at
+)
+select
+  u.id,
+  lower(u.email),
+  coalesce(nullif(trim(u.raw_user_meta_data ->> 'name'), ''), split_part(u.email, '@', 1)),
+  coalesce(u.raw_user_meta_data ->> 'dob', ''),
+  coalesce(u.raw_user_meta_data ->> 'blood_group', ''),
+  coalesce(u.raw_user_meta_data ->> 'gender', ''),
+  'LV-' || nextval('public.lyfevault_card_id_seq')::text,
+  '[]'::jsonb,
+  '[]'::jsonb,
+  '[]'::jsonb,
+  '[]'::jsonb,
+  floor(extract(epoch from now()) * 1000)::bigint
+from auth.users u
+where u.email is not null
+  and not exists (select 1 from public.profiles p where p.auth_user_id = u.id or lower(p.email) = lower(u.email));
+
+revoke insert, update, select on public.profiles from authenticated;
+grant select (auth_user_id, email, name, dob, blood_group, gender, card_id, allergies, conditions, medications, contacts, updated_at)
+  on public.profiles to authenticated;
 grant update (name, dob, blood_group, gender, allergies, conditions, medications, contacts, updated_at)
   on public.profiles to authenticated;
+revoke select on public.dependents from authenticated;
+grant select (id, owner_email, guardian_id, dependent_type, name, dob, relationship, blood_group, allergies, conditions, medications, contacts, assigned_email, medi_tag_id)
+  on public.dependents to authenticated;
 
 create or replace function public.protect_lyfevault_card_id()
 returns trigger
@@ -47,9 +96,7 @@ security definer
 set search_path = ''
 as $$
 begin
-  if tg_op = 'INSERT' and auth.uid() is not null then
-    new.card_id := 'LV-' || nextval('public.lyfevault_card_id_seq')::text;
-  elsif tg_op = 'UPDATE' and auth.uid() is not null and new.card_id is distinct from old.card_id then
+  if tg_op = 'UPDATE' and auth.uid() is not null and new.card_id is distinct from old.card_id then
     raise exception 'Card IDs are assigned by LyfeVault and cannot be changed';
   end if;
   return new;
@@ -159,39 +206,6 @@ grant select on public.privacy_audit_logs to authenticated;
 create policy privacy_audit_logs_owner_select on public.privacy_audit_logs
   for select to authenticated using (user_id = auth.uid());
 
-create table if not exists public.practitioner_patient_access (
-  id uuid primary key default gen_random_uuid(),
-  practitioner_id uuid not null references auth.users(id) on delete cascade,
-  patient_user_id uuid not null references auth.users(id) on delete cascade,
-  mmc_id text not null,
-  expires_at timestamptz not null default now() + interval '10 minutes',
-  created_at timestamptz not null default now()
-);
-create index if not exists practitioner_patient_access_lookup_idx
-  on public.practitioner_patient_access(practitioner_id, patient_user_id, expires_at desc);
-alter table public.practitioner_patient_access enable row level security;
-revoke all on public.practitioner_patient_access from anon, authenticated;
-
-create or replace function public.practitioner_has_patient_access(p_owner_email text)
-returns boolean
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select exists (
-    select 1
-    from public.practitioner_patient_access x
-    join public.profiles p on p.auth_user_id = x.patient_user_id
-    join public.practitioner_allowlist a on a.mmc_id = x.mmc_id and a.active
-    where x.practitioner_id = auth.uid()
-      and lower(p.email) = lower(p_owner_email)
-      and x.expires_at > now()
-  );
-$$;
-revoke all on function public.practitioner_has_patient_access(text) from public, anon;
-grant execute on function public.practitioner_has_patient_access(text) to authenticated;
-
 create or replace function public.log_privacy_activity(p_action text, p_details jsonb default '{}'::jsonb)
 returns void
 language plpgsql
@@ -298,6 +312,46 @@ $$;
 revoke all on function public.register_card_login_attempt(text) from public, anon, authenticated;
 grant execute on function public.register_card_login_attempt(text) to service_role;
 
+create table if not exists public.practitioner_lookup_attempts (
+  ip_hash text primary key,
+  window_started_at timestamptz not null default now(),
+  attempts integer not null default 0
+);
+alter table public.practitioner_lookup_attempts enable row level security;
+revoke all on public.practitioner_lookup_attempts from public, anon, authenticated;
+grant all on public.practitioner_lookup_attempts to service_role;
+
+create or replace function public.register_practitioner_lookup_attempt(p_ip_hash text)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  attempt_count integer;
+begin
+  if coalesce(auth.role(), '') <> 'service_role' or length(coalesce(p_ip_hash, '')) <> 64 then
+    raise exception 'Service role and a hashed client address are required';
+  end if;
+  delete from public.practitioner_lookup_attempts where window_started_at < now() - interval '1 day';
+  insert into public.practitioner_lookup_attempts(ip_hash, window_started_at, attempts)
+  values (p_ip_hash, now(), 1)
+  on conflict (ip_hash) do update set
+    window_started_at = case
+      when public.practitioner_lookup_attempts.window_started_at < now() - interval '15 minutes' then now()
+      else public.practitioner_lookup_attempts.window_started_at
+    end,
+    attempts = case
+      when public.practitioner_lookup_attempts.window_started_at < now() - interval '15 minutes' then 1
+      else public.practitioner_lookup_attempts.attempts + 1
+    end
+  returning attempts into attempt_count;
+  return attempt_count;
+end;
+$$;
+revoke all on function public.register_practitioner_lookup_attempt(text) from public, anon, authenticated;
+grant execute on function public.register_practitioner_lookup_attempt(text) to service_role;
+
 create or replace function public.practitioner_lookup_insurance(p_card_id text, p_mmc_id text)
 returns jsonb
 language plpgsql
@@ -308,7 +362,7 @@ declare
   patient_user_id uuid;
   result jsonb;
 begin
-  if auth.uid() is null or not exists (
+  if coalesce(auth.role(), '') <> 'service_role' or not exists (
     select 1 from public.practitioner_allowlist a
     where a.active and a.mmc_id = trim(p_mmc_id)
   ) then
@@ -353,8 +407,8 @@ begin
   return result;
 end;
 $$;
-revoke all on function public.practitioner_lookup_insurance(text,text) from public, anon;
-grant execute on function public.practitioner_lookup_insurance(text,text) to authenticated;
+revoke all on function public.practitioner_lookup_insurance(text,text) from public, anon, authenticated;
+grant execute on function public.practitioner_lookup_insurance(text,text) to service_role;
 
 create or replace function public.practitioner_lookup_patient_readonly(p_card_id text, p_mmc_id text)
 returns jsonb
@@ -366,6 +420,9 @@ declare
   patient_record jsonb;
   patient_user_id uuid;
 begin
+  if coalesce(auth.role(), '') <> 'service_role' then
+    raise exception 'Service role required';
+  end if;
   patient_record := public.practitioner_lookup_patient(p_card_id, p_mmc_id);
   if patient_record is null then
     return null;
@@ -386,16 +443,14 @@ begin
     raise exception 'Patient account record is unavailable';
   end if;
 
-  insert into public.practitioner_patient_access(practitioner_id, patient_user_id, mmc_id, expires_at)
-  values (auth.uid(), patient_user_id, trim(p_mmc_id), now() + interval '10 minutes');
   insert into public.privacy_audit_logs(user_id, action, details)
   values (patient_user_id, 'practitioner_access', jsonb_build_object('scope','medical_record','mmc_id',trim(p_mmc_id)));
 
   return patient_record - 'email' - 'dependent_id';
 end;
 $$;
-revoke all on function public.practitioner_lookup_patient_readonly(text,text) from public, anon;
-grant execute on function public.practitioner_lookup_patient_readonly(text,text) to authenticated;
+revoke all on function public.practitioner_lookup_patient_readonly(text,text) from public, anon, authenticated;
+grant execute on function public.practitioner_lookup_patient_readonly(text,text) to service_role;
 revoke all on function public.practitioner_lookup_patient(text,text) from public, anon, authenticated;
 
 create or replace function public.delete_lyfevault_user_data(p_user_id uuid, p_email text)
@@ -421,8 +476,6 @@ revoke all on function public.delete_lyfevault_user_data(uuid,text) from public,
 grant execute on function public.delete_lyfevault_user_data(uuid,text) to service_role;
 
 drop policy if exists medical_reports_practitioner_select on public.medical_reports;
-create policy medical_reports_practitioner_select on public.medical_reports
-  for select to authenticated using (public.practitioner_has_patient_access(owner_email));
 
 drop policy if exists medical_reports_bucket_select on storage.objects;
 create policy medical_reports_bucket_select on storage.objects

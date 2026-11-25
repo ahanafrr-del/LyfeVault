@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { Download, FileJson2, LockKeyhole, ShieldCheck, Trash2 } from "lucide-react"
+import { FileJson2, LockKeyhole, ShieldCheck, Trash2 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { ModalShell } from "./shared"
 

@@ -227,22 +227,29 @@ export function AuthScreen({
         )}
 
         {mode === "signup" && (
-          <label className="mt-1 flex items-start gap-2.5 rounded-xl bg-card px-3 py-2.5 text-xs leading-relaxed text-muted-foreground shadow-sm">
-            <input
-              type="checkbox"
-              checked={agreeTerms}
-              onChange={(e) => {
-                setAgreeTerms(e.target.checked)
-                setError(null)
-              }}
-              required
-              aria-required="true"
-              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-            />
-            <span>
-              I have read the <LegalLinks /> and consent to LyfeVault processing my health data to provide my medical passport and emergency access.
-            </span>
-          </label>
+          <div className="mt-1 rounded-xl bg-card px-3 py-2.5 text-xs leading-relaxed text-muted-foreground shadow-sm">
+            <div className="flex items-start gap-2.5">
+              <input
+                id="health-data-consent"
+                type="checkbox"
+                checked={agreeTerms}
+                onChange={(e) => {
+                  setAgreeTerms(e.target.checked)
+                  setError(null)
+                }}
+                required
+                aria-required="true"
+                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+              />
+              <label htmlFor="health-data-consent">
+                I have read the Terms of Service and Privacy Policy and consent to LyfeVault processing my health data to provide my medical passport and emergency access.
+              </label>
+            </div>
+            <div className="ml-6 mt-2 flex flex-wrap items-center gap-2">
+              <span>Read:</span>
+              <LegalLinks />
+            </div>
+          </div>
         )}
 
         {statusMessage && (
@@ -276,7 +283,7 @@ export function AuthScreen({
           className="flex w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-card py-3 text-sm font-bold text-primary shadow-sm transition hover:bg-primary/5"
         >
           <Stethoscope className="h-5 w-5" />
-          {"\uD83E\uDE7A Doctor / Practitioner Access"}
+          Doctor / Practitioner Access
         </button>
       </div>
 

@@ -4,7 +4,6 @@ import { useState } from "react"
 import { Activity, BadgeCheck, CalendarDays, Droplet, FileClock, HeartPulse, Home, LogOut, Phone, Search, ShieldCheck } from "lucide-react"
 import { computeAge, type MedicalReport, type UserProfile } from "@/lib/store"
 import type { PractitionerSession } from "./practitioner-scan"
-import { supabase } from "@/lib/supabase"
 import { FileViewer } from "./file-viewer"
 
 type InsuranceSummary = {
@@ -21,6 +20,17 @@ type InsuranceSummary = {
 }
 
 type ClinicalTab = "home" | "timeline"
+type PractitionerLookupResponse = { error?: string; patient?: Record<string, unknown>; insurance?: unknown }
+
+async function requestPractitionerLookup(cardId: string, mmcId: string) {
+  const response = await fetch("/api/practitioner/lookup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cardId, mmcId }),
+  })
+  const result = await response.json() as PractitionerLookupResponse
+  return { response, result }
+}
 
 export function ClinicalMode({
   session,
@@ -50,24 +60,16 @@ export function ClinicalMode({
     setPatient(null)
     setInsurance(null)
 
-    const { data, error } = await supabase.rpc("practitioner_lookup_patient_readonly", {
-      p_card_id: id,
-      p_mmc_id: session.registrationNumber,
-    })
-    if (error || !data || typeof data !== "object") {
-      setLookupError("No patient found, or practitioner access could not be verified.")
-      setLoading(false)
-      return
-    }
+    try {
+      const { response, result } = await requestPractitionerLookup(id, session.registrationNumber)
+      if (!response.ok || !result.patient) {
+        setLookupError(result.error ?? "No patient found, or practitioner access could not be verified.")
+        return
+      }
 
-    const record = data as Record<string, unknown>
-    const reportRows = Array.isArray(record.reports) ? record.reports as Record<string, unknown>[] : []
-    const reports: MedicalReport[] = await Promise.all(reportRows.map(async (report) => {
-      const filePath = typeof report.file_path === "string" ? report.file_path : undefined
-      const { data: signed } = filePath
-        ? await supabase.storage.from("medical-reports").createSignedUrl(filePath, 300)
-        : { data: null }
-      return {
+      const record = result.patient
+      const reportRows = Array.isArray(record.reports) ? record.reports as Record<string, unknown>[] : []
+      const reports: MedicalReport[] = reportRows.map((report) => ({
         id: String(report.id ?? ""),
         doctorName: String(report.doctor_name ?? ""),
         specialization: String(report.specialization ?? ""),
@@ -78,59 +80,54 @@ export function ClinicalMode({
         fileName: String(report.file_name ?? ""),
         notes: String(report.notes ?? ""),
         createdAt: Number(report.created_at ?? 0),
-        filePath,
-        fileUrl: signed?.signedUrl,
+        fileUrl: typeof report.fileUrl === "string" ? report.fileUrl : undefined,
         uploadedByRole: report.uploaded_by_role === "practitioner" ? "practitioner" : "patient",
         doctorMmcId: typeof report.doctor_mmc_id === "string" ? report.doctor_mmc_id : undefined,
-      }
-    }))
-
-    const nextPatient: UserProfile = {
-      name: String(record.name ?? ""),
-      dob: String(record.dob ?? ""),
-      bloodGroup: String(record.blood_group ?? ""),
-      gender: String(record.gender ?? ""),
-      email: "",
-      password: "",
-      cardId: String(record.card_id ?? id),
-      allergies: Array.isArray(record.allergies) ? record.allergies.map(String) : [],
-      conditions: Array.isArray(record.conditions) ? record.conditions.map(String) : [],
-      medications: Array.isArray(record.medications) ? record.medications.map(String) : [],
-      contacts: Array.isArray(record.contacts) ? record.contacts as UserProfile["contacts"] : [],
-      reports,
-      dependents: [],
+      }))
+      setPatient({
+        name: String(record.name ?? ""),
+        dob: String(record.dob ?? ""),
+        bloodGroup: String(record.blood_group ?? ""),
+        gender: String(record.gender ?? ""),
+        email: "",
+        password: "",
+        cardId: String(record.card_id ?? id),
+        allergies: Array.isArray(record.allergies) ? record.allergies.map(String) : [],
+        conditions: Array.isArray(record.conditions) ? record.conditions.map(String) : [],
+        medications: Array.isArray(record.medications) ? record.medications.map(String) : [],
+        contacts: Array.isArray(record.contacts) ? record.contacts as UserProfile["contacts"] : [],
+        reports,
+        dependents: [],
+      })
+      setInsurance(result.insurance && typeof result.insurance === "object" ? result.insurance as InsuranceSummary : null)
+      setTab("home")
+    } catch {
+      setLookupError("Practitioner lookup is temporarily unavailable. Please try again.")
+    } finally {
+      setLoading(false)
     }
-    setPatient(nextPatient)
-    const { data: coverage } = await supabase.rpc("practitioner_lookup_insurance", {
-      p_card_id: id,
-      p_mmc_id: session.registrationNumber,
-    })
-    setInsurance(coverage && typeof coverage === "object" ? coverage as InsuranceSummary : null)
-    setTab("home")
-    setLoading(false)
   }
 
   async function openReportFile(report: MedicalReport) {
     setFileError(null)
-    if (!report.filePath) {
-      if (report.fileUrl) setViewer({ url: report.fileUrl, name: report.fileName || "Medical report" })
-      return
-    }
     if (!patient) return
-    const { error: accessError } = await supabase.rpc("practitioner_lookup_patient_readonly", {
-      p_card_id: patient.cardId,
-      p_mmc_id: session.registrationNumber,
-    })
-    if (accessError) {
-      setFileError("Practitioner access expired. Search for the patient again before opening files.")
-      return
-    }
-    const { data, error } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 300)
-    if (error || !data?.signedUrl) {
+    try {
+      const { response, result } = await requestPractitionerLookup(patient.cardId, session.registrationNumber)
+      if (!response.ok || !result.patient) {
+        setFileError("Practitioner access could not be refreshed. Search for the patient again.")
+        return
+      }
+      const reports = Array.isArray(result.patient.reports) ? result.patient.reports as Record<string, unknown>[] : []
+      const refreshedReport = reports.find((item) => String(item.id ?? "") === report.id)
+      const fileUrl = typeof refreshedReport?.fileUrl === "string" ? refreshedReport.fileUrl : null
+      if (!fileUrl) {
+        setFileError("The private report is unavailable. Please try again.")
+        return
+      }
+      setViewer({ url: fileUrl, name: report.fileName || "Medical report" })
+    } catch {
       setFileError("The private report could not be opened. Please try again.")
-      return
     }
-    setViewer({ url: data.signedUrl, name: report.fileName || "Medical report" })
   }
 
   return (
@@ -166,7 +163,7 @@ export function ClinicalMode({
                 <div className="rounded-2xl border border-border bg-card p-5"><div className="mb-3 flex items-center gap-2"><Phone className="size-5 text-primary" /><h3 className="font-bold text-foreground">Emergency contacts</h3></div>{patient.contacts.length ? <ul className="flex flex-col gap-2">{patient.contacts.map((contact) => <li key={contact.id} className="flex items-center justify-between gap-3 rounded-xl bg-secondary p-3"><div className="min-w-0"><p className="truncate text-sm font-semibold text-foreground">{contact.name}</p><p className="text-xs text-muted-foreground">{contact.relation}</p></div><a href={`tel:${contact.phone}`} aria-label={`Call ${contact.name}`} className="rounded-lg bg-primary px-3 py-2 text-xs font-bold text-primary-foreground">{contact.phone || "Call"}</a></li>)}</ul> : <p className="text-sm text-muted-foreground">No emergency contacts recorded.</p>}</div>
                 {insurance && <div className="rounded-2xl border border-accent/20 bg-accent/5 p-5"><div className="mb-3 flex items-center gap-2"><HeartPulse className="size-5 text-accent" /><h3 className="font-bold text-foreground">Active health insurance</h3></div><p className="text-sm font-bold text-foreground">{insurance.provider_name}</p><p className="mt-0.5 text-xs text-muted-foreground">{insurance.plan_name || insurance.plan_type} · {insurance.plan_type}</p><dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">{insurance.policy_number && <SafeCoverageValue label="Policy" value={insurance.policy_number} />}{insurance.member_id && <SafeCoverageValue label="Member" value={insurance.member_id} />}{insurance.group_number && <SafeCoverageValue label="Group" value={insurance.group_number} />}{insurance.valid_until && <SafeCoverageValue label="Valid until" value={insurance.valid_until} />}</dl>{insurance.helpline_phone && <a href={`tel:${insurance.helpline_phone}`} className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary underline"><Phone className="size-4" />Call insurance helpline</a>}</div>}
               </div>
-            </section> : <section role="tabpanel" className="py-5"><div className="rounded-2xl border border-border bg-card p-5"><div className="mb-4 flex items-center gap-2"><FileClock className="size-5 text-primary" /><h3 className="font-bold text-foreground">Medical Timeline</h3></div>{fileError && <p role="alert" className="mb-3 text-sm text-destructive">{fileError}</p>}{patient.reports.length ? <ol className="flex flex-col gap-3">{patient.reports.map((report) => <li key={report.id} className="rounded-xl bg-secondary p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-sm font-bold text-foreground">{report.specialization || "Medical report"}</p><p className="mt-1 text-xs text-muted-foreground">{report.date || "Date not recorded"}{report.doctorName ? ` · ${report.doctorName}` : ""}{report.clinic ? ` · ${report.clinic}` : ""}</p></div><span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-semibold text-primary">{report.uploadedByRole === "practitioner" ? "Practitioner record" : "Patient record"}</span></div>{report.notes && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{report.notes}</p>}{(report.filePath || report.fileUrl) && <button type="button" onClick={() => void openReportFile(report)} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-primary"><FileClock className="size-4" />View {report.fileName || "attached file"}</button>}</li>)}</ol> : <p className="rounded-xl bg-secondary p-4 text-sm text-muted-foreground">No medical timeline records are available.</p>}</div></section>}
+            </section> : <section role="tabpanel" className="py-5"><div className="rounded-2xl border border-border bg-card p-5"><div className="mb-4 flex items-center gap-2"><FileClock className="size-5 text-primary" /><h3 className="font-bold text-foreground">Medical Timeline</h3></div>{fileError && <p role="alert" className="mb-3 text-sm text-destructive">{fileError}</p>}{patient.reports.length ? <ol className="flex flex-col gap-3">{patient.reports.map((report) => <li key={report.id} className="rounded-xl bg-secondary p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-sm font-bold text-foreground">{report.specialization || "Medical report"}</p><p className="mt-1 text-xs text-muted-foreground">{report.date || "Date not recorded"}{report.doctorName ? ` · ${report.doctorName}` : ""}{report.clinic ? ` · ${report.clinic}` : ""}</p></div><span className="rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-semibold text-primary">{report.uploadedByRole === "practitioner" ? "Practitioner record" : "Patient record"}</span></div>{report.notes && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{report.notes}</p>}{report.fileUrl && <button type="button" onClick={() => void openReportFile(report)} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-semibold text-primary"><FileClock className="size-4" />View {report.fileName || "attached file"}</button>}</li>)}</ol> : <p className="rounded-xl bg-secondary p-4 text-sm text-muted-foreground">No medical timeline records are available.</p>}</div></section>}
           </>}
         </div>
       </div>
