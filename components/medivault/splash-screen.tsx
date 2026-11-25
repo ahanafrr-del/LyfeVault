@@ -16,7 +16,7 @@ export function SplashScreen({ onEnter }: { onEnter: () => void }) {
             Lyfe<span className="text-accent">Vault</span>
           </h1>
           <p className="mt-3 text-sm font-medium text-primary-foreground/80">
-            Your health records, secured and always with you.
+            A bond that cares, always there.
           </p>
         </div>
       </div>

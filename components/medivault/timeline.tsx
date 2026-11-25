@@ -4,6 +4,8 @@ import { useMemo, useState } from "react"
 import { FileText, Stethoscope, MapPin, CalendarDays, FileX } from "lucide-react"
 import { ScreenHeader, Chip, EmptyState, ModalShell } from "./shared"
 import type { MedicalReport, UserProfile } from "@/lib/store"
+import { FileViewer } from "./file-viewer"
+import { supabase } from "@/lib/supabase"
 
 const FILTERS = ["All", "Cardiologist", "Dentist", "General Physician", "Dermatologist", "Orthopedic"]
 
@@ -18,6 +20,22 @@ export function Timeline({
 }) {
   const [filter, setFilter] = useState("All")
   const [selected, setSelected] = useState<MedicalReport | null>(null)
+  const [viewer, setViewer] = useState<{ url: string; name: string } | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+
+  async function openReportFile(report: MedicalReport) {
+    setFileError(null)
+    if (!report.filePath) {
+      if (report.fileUrl) setViewer({ url: report.fileUrl, name: report.fileName || "Medical report" })
+      return
+    }
+    const { data, error } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 300)
+    if (error || !data?.signedUrl) {
+      setFileError("The private file is unavailable. Please try again.")
+      return
+    }
+    setViewer({ url: data.signedUrl, name: report.fileName || "Medical report" })
+  }
 
   const reports = useMemo(() => {
     const sorted = [...user.reports].sort((a, b) => b.createdAt - a.createdAt)
@@ -82,17 +100,20 @@ export function Timeline({
       {selected && (
         <ModalShell
           title="View Report"
-          subtitle={`${selected.specialization} \u00b7 ${selected.date}`}
+          subtitle={`${selected.specialization} · ${selected.date}`}
           onClose={() => setSelected(null)}
         >
-          <ReportView report={selected} patient={user.name} />
+          {fileError && <p role="alert" className="px-5 pt-4 text-sm text-destructive">{fileError}</p>}
+          <ReportView report={selected} patient={user.name} onViewFile={(report) => void openReportFile(report)} />
         </ModalShell>
       )}
+      {viewer && <FileViewer fileName={viewer.name} fileUrl={viewer.url} onClose={() => setViewer(null)} />}
+
     </div>
   )
 }
 
-function ReportView({ report, patient }: { report: MedicalReport; patient: string }) {
+function ReportView({ report, patient, onViewFile }: { report: MedicalReport; patient: string; onViewFile: (report: MedicalReport) => void }) {
   return (
     <div className="p-5">
       {/* Simulated PDF page */}
@@ -121,10 +142,10 @@ function ReportView({ report, patient }: { report: MedicalReport; patient: strin
             {report.notes || "No additional notes were provided with this report."}
           </p>
         </div>
-        {report.fileUrl ? (
-          <a href={report.fileUrl} target="_blank" rel="noreferrer" className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2.5 text-xs font-semibold text-primary-foreground">
+        {report.fileUrl || report.filePath ? (
+          <button type="button" onClick={() => onViewFile(report)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2.5 text-xs font-semibold text-primary-foreground">
             <FileText className="size-4" /> View / download attached file
-          </a>
+          </button>
         ) : (
           <div className="mt-4 flex items-center gap-2 rounded-xl bg-accent/10 px-3 py-2 text-xs font-medium text-accent">
             <Stethoscope className="h-4 w-4" />

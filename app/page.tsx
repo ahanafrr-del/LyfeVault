@@ -9,7 +9,10 @@ import { SegmentationScreen } from "@/components/medivault/segmentation-screen"
 import { EmergencyView } from "@/components/medivault/emergency-view"
 import { Dashboard, type DashboardAction } from "@/components/medivault/dashboard"
 import { MinorDashboard } from "@/components/medivault/minor-dashboard"
-import { TabBar, type MainTab } from "@/components/medivault/tab-bar"
+import { type MainTab } from "@/components/medivault/tab-bar"
+import { AppShell } from "@/components/medivault/app-shell"
+import { InsuranceSection } from "@/components/medivault/insurance-section"
+import { PrivacySection } from "@/components/medivault/privacy-section"
 import { Timeline } from "@/components/medivault/timeline"
 import { Departments } from "@/components/medivault/departments"
 import { DependentsDirectory } from "@/components/medivault/dependents-directory"
@@ -56,7 +59,7 @@ export default function Page() {
         setSubScreen("departments")
         break
       case "emergency":
-        setStage("emergency")
+        setTab("emergency")
         break
       case "settings":
         setTab("profile")
@@ -65,10 +68,7 @@ export default function Page() {
   }
 
   function handleLogout() {
-    // Clear the persisted session (userRole -> null). Age-derived isChildProfile
-    // resets automatically once there is no active user. Non-session data in
-    // localStorage (registered accounts, reports) is preserved.
-    store.logout()
+    void store.logout()
     // Reset navigation state and return to the landing screen.
     setStage("splash")
     setTab("home")
@@ -106,7 +106,6 @@ export default function Page() {
     if (visibleStage === "clinical" && practitioner) {
       return (
         <ClinicalMode
-          store={store}
           session={practitioner}
           onExit={async () => {
             setPractitioner(null)
@@ -120,7 +119,7 @@ export default function Page() {
     if (visibleStage === "segment") {
       // Screen 1.5 — confirm minor vs adult segmentation before entering the app.
       if (!user) return <SplashScreen onEnter={() => setStage("auth")} />
-      return <SegmentationScreen user={user} onProceed={() => setStage("app")} />
+      return <SegmentationScreen user={user} store={store} onProceed={() => setStage("app")} />
     }
 
     if (visibleStage === "emergency") {
@@ -181,6 +180,9 @@ export default function Page() {
                   />
                 ))}
               {tab === "timeline" && <Timeline user={user} showBack={false} />}
+              {tab === "insurance" && <InsuranceSection />}
+              {tab === "emergency" && <EmergencyView profile={user} onBack={() => setTab("home")} />}
+              {tab === "privacy" && <PrivacySection onLogout={handleLogout} />}
               {tab === "notifications" && (
                 <div className="flex h-full flex-col bg-secondary">
                   <ScreenHeader title="Alerts" subtitle="Reminders & updates" />
@@ -192,18 +194,11 @@ export default function Page() {
                 </div>
               )}
               {tab === "profile" && (
-                <ProfileScreen store={store} user={user} onLogout={handleLogout} />
+                <ProfileScreen store={store} user={user} onLogout={handleLogout} onPrivacy={() => setTab("privacy")} />
               )}
             </div>
           </div>
         </div>
-
-        <TabBar
-          active={tab}
-          onNavigate={setTab}
-          onAdd={() => setOverlay("upload")}
-          showAdd={!minor || (minorUnlocked && tab === "home")}
-        />
 
         {overlay === "upload" && (!minor || minorUnlocked) && (
           <DoctorUpload
@@ -219,16 +214,35 @@ export default function Page() {
     )
   }
 
+  if (visibleStage === "app" && user) {
+    return (
+      <main className="min-h-screen bg-background">
+        <div className="h-[100dvh] min-h-[560px] w-full md:h-screen md:min-h-0">
+          <AppShell
+            user={user}
+            active={tab}
+            onNavigate={setTab}
+            onLogout={handleLogout}
+            onAdd={() => setOverlay("upload")}
+            showAdd={!minor || (minorUnlocked && tab === "home")}
+          >
+            {renderPhoneContent()}
+          </AppShell>
+        </div>
+      </main>
+    )
+  }
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-secondary p-0 sm:p-6">
-      <PhoneFrame>{renderPhoneContent()}</PhoneFrame>
+    <main className={`flex min-h-screen items-center justify-center bg-secondary ${visibleStage === "clinical" ? "p-0" : "p-0 sm:p-6"}`}>
+      <PhoneFrame fullWidth={visibleStage === "clinical"}>{renderPhoneContent()}</PhoneFrame>
     </main>
   )
 }
 
-function PhoneFrame({ children }: { children: React.ReactNode }) {
+function PhoneFrame({ children, fullWidth = false }: { children: React.ReactNode; fullWidth?: boolean }) {
   return (
-    <div className="relative h-[100dvh] w-full overflow-hidden bg-card sm:h-[min(812px,calc(100dvh-3rem))] sm:w-[390px] sm:rounded-[2.5rem] sm:border-8 sm:border-foreground/90 sm:shadow-2xl">
+    <div className={`relative w-full overflow-hidden bg-card ${fullWidth ? "h-[100dvh]" : "h-[100dvh] sm:h-[min(812px,calc(100dvh-3rem))] sm:w-[390px] sm:rounded-[2.5rem] sm:border-8 sm:border-foreground/90 sm:shadow-2xl"}`}>
       <div className="relative h-full w-full overflow-hidden">{children}</div>
     </div>
   )

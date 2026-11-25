@@ -64,15 +64,11 @@ export type UserProfile = {
   dependents: DependentProfile[]
 }
 
-type PatientMatch = { kind: "user" | "dependent"; cardId: string; name: string }
 type Result = { ok: boolean; error?: string; message?: string; pendingConfirmation?: boolean }
-type StoredCredential = { salt: string; hash: string }
 
 type ProfileRow = {
   auth_user_id: string | null
   email: string
-  password_salt: string | null
-  password_hash: string | null
   name: string | null
   dob: string | null
   blood_group: string | null
@@ -114,16 +110,7 @@ type DependentRow = {
   medications?: unknown
   contacts: unknown
   assigned_email: string | null
-  assigned_password: string | null
-  parental_secret_code: string | null
   medi_tag_id: string | null
-}
-
-const SESSION_KEY = "medivault_session_v1"
-const PASSWORD_ITERATIONS = 310_000
-
-function canUseStorage(): boolean {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined"
 }
 
 function normalizeEmail(email: string): string {
@@ -176,56 +163,6 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
       contacts: dependent.contacts ?? [],
     })),
   }
-}
-
-function readSessionEmail(): string | null {
-  if (!canUseStorage()) return null
-  try {
-    const email = window.localStorage.getItem(SESSION_KEY)
-    return email ? normalizeEmail(email) : null
-  } catch {
-    return null
-  }
-}
-
-function writeSession(email: string): boolean {
-  if (!canUseStorage()) return false
-  try {
-    window.localStorage.setItem(SESSION_KEY, normalizeEmail(email))
-    return true
-  } catch {
-    return false
-  }
-}
-
-function removeSession(): void {
-  if (!canUseStorage()) return
-  try {
-    window.localStorage.removeItem(SESSION_KEY)
-  } catch {
-    // Storage may be disabled by the browser; in-memory state is still cleared.
-  }
-}
-
-function passwordBytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
-}
-
-async function hashPassword(password: string, saltHex?: string): Promise<StoredCredential> {
-  if (typeof window === "undefined" || !window.crypto?.subtle) {
-    throw new Error("Secure password hashing is unavailable in this environment. Use HTTPS or a modern browser.")
-  }
-  const salt = saltHex
-    ? Uint8Array.from(saltHex.match(/.{1,2}/g) ?? [], (byte) => Number.parseInt(byte, 16))
-    : window.crypto.getRandomValues(new Uint8Array(16))
-  const key = await window.crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"])
-  const bits = await window.crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: PASSWORD_ITERATIONS, hash: "SHA-256" }, key, 256)
-  return { salt: passwordBytesToHex(salt), hash: passwordBytesToHex(new Uint8Array(bits)) }
-}
-
-async function passwordMatches(password: string, credential: StoredCredential): Promise<boolean> {
-  const calculated = await hashPassword(password, credential.salt)
-  return calculated.hash === credential.hash
 }
 
 function dependentAsUser(parent: UserProfile, dependent: DependentProfile): UserProfile {
@@ -286,7 +223,7 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   const key = normalizeEmail(email)
   if (!key && !authUserId) return null
 
-  const profileQuery = supabase.from("profiles").select("*")
+  const profileQuery = supabase.from("profiles").select("auth_user_id,email,name,dob,blood_group,gender,card_id,allergies,conditions,medications,contacts,updated_at")
   const { data: profileData, error: profileError } = authUserId
     ? await profileQuery.eq("auth_user_id", authUserId).maybeSingle()
     : await profileQuery.eq("email", key).maybeSingle()
@@ -302,12 +239,12 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   const [{ data: reportsData, error: reportsError }, { data: dependentsData, error: dependentsError }] = await Promise.all([
     supabase
       .from("medical_reports")
-      .select("*")
+      .select("id,owner_email,doctor_name,specialization,clinic,date,time,license_number,file_name,notes,created_at,file_path,uploaded_by_role,doctor_mmc_id,dependent_id")
       .eq("owner_email", key)
       .order("created_at", { ascending: false }),
     supabase
       .from("dependents")
-      .select("*")
+      .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id")
       .eq("owner_email", key),
   ])
 
@@ -317,7 +254,7 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   const mappedReports = (reportsData ?? []).map((item) => mapReportRow(item as ReportRow))
   const signedReports = await Promise.all(mappedReports.map(async (report) => {
     if (!report.filePath) return report
-    const { data } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 900)
+    const { data } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 300)
     return { ...report, fileUrl: data?.signedUrl }
   }))
 
@@ -346,7 +283,7 @@ async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: stri
 
   const { data: linkedRow, error: linkedError } = await supabase
     .from("dependents")
-    .select("*")
+    .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id")
     .eq("assigned_email", email)
     .maybeSingle()
   if (linkedError) throw new Error(linkedError.message)
@@ -354,62 +291,23 @@ async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: stri
     const dependent = mapDependentRow(linkedRow as DependentRow)
     const { data: linkedReports, error: linkedReportsError } = await supabase
       .from("medical_reports")
-      .select("*")
+      .select("id,owner_email,doctor_name,specialization,clinic,date,time,license_number,file_name,notes,created_at,file_path,uploaded_by_role,doctor_mmc_id,dependent_id")
       .eq("dependent_id", dependent.id)
       .order("created_at", { ascending: false })
     if (linkedReportsError) throw new Error(linkedReportsError.message)
     const reports = await Promise.all((linkedReports ?? []).map(async (item) => {
       const report = mapReportRow(item as ReportRow)
       if (!report.filePath) return report
-      const { data } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 900)
+      const { data } = await supabase.storage.from("medical-reports").createSignedUrl(report.filePath, 300)
       return { ...report, fileUrl: data?.signedUrl }
     }))
     return { ...dependentAsUser({ email } as UserProfile, dependent), reports }
   }
 
   const existing = await fetchFullProfileByEmail(email, user.id)
-  if (existing) {
-    if (existing.row.auth_user_id !== user.id) {
-      const { error } = await supabase.from("profiles").update({ auth_user_id: user.id }).eq("email", email)
-      if (error) throw new Error(error.message)
-    }
-    return existing.profile
-  }
+  if (existing) return existing.profile
 
-  const metadata = user.user_metadata ?? {}
-  const profile = normalizeUser({
-    name: String(metadata.name ?? ""),
-    dob: String(metadata.dob ?? ""),
-    bloodGroup: String(metadata.blood_group ?? ""),
-    gender: String(metadata.gender ?? ""),
-    email,
-    password: "",
-    cardId: String(metadata.card_id ?? ""),
-    allergies: [],
-    conditions: [],
-    medications: [],
-    contacts: [],
-    reports: [],
-    dependents: [],
-  })
-  const { error } = await supabase.from("profiles").upsert({
-    auth_user_id: user.id,
-    email,
-    name: profile.name,
-    dob: profile.dob,
-    blood_group: profile.bloodGroup,
-    gender: profile.gender,
-    card_id: profile.cardId,
-    allergies: [],
-    conditions: [],
-    medications: [],
-    contacts: [],
-    updated_at: Date.now(),
-  }, { onConflict: "auth_user_id" })
-  if (error) throw new Error(error.message)
-
-  const created = await fetchFullProfileByEmail(email, user.id)
-  return created?.profile ?? profile
+  return null
 }
 
 async function syncDependentsToSupabase(ownerEmail: string, dependents: DependentProfile[]): Promise<void> {
@@ -456,9 +354,7 @@ async function syncDependentsToSupabase(ownerEmail: string, dependents: Dependen
   }
 }
 
-type AuthData = Omit<Pick<UserProfile, "name" | "dob" | "bloodGroup" | "gender" | "email" | "password" | "cardId">, "cardId"> & { cardId?: string }
-type Practitioner = { doctorName: string; registrationNumber: string; institution: string; hospitalPhone?: string }
-
+type AuthData = { name: string; email: string; password: string; dob?: string; bloodGroup?: string; gender?: string }
 export type StoreApi = {
   ready: boolean
   currentUser: UserProfile | null
@@ -467,15 +363,10 @@ export type StoreApi = {
   signup: (data: AuthData) => Promise<Result>
   login: (email: string, password: string) => Promise<Result>
   loginByCard: (cardId: string, password: string) => Promise<Result>
+  loginWithPasskey: () => Promise<Result>
+  registerPasskey: () => Promise<Result>
   /** Looks up a registered user or dependent by physical Card/Tag ID. */
   getUserByCardId: (cardId: string) => Promise<UserProfile | null>
-  /** Read-only lookup of a locally registered account by email. */
-  getUserByEmail: (email: string) => Promise<UserProfile | null>
-  /** Searches local profiles and linked dependents for an exact Card/Tag ID. */
-  findPatientByCardId: (cardId: string) => Promise<PatientMatch | null>
-  /** Attaches a clinical report to the profile identified by a Card/Tag ID. */
-  addReportToCard: (cardId: string, report: Omit<MedicalReport, "id" | "createdAt">, practitioner?: Practitioner) => Promise<Result>
-  verifyCredentials: (email: string, password: string) => Promise<Result>
   requestPasswordReset: (email: string) => Promise<Result>
   getDependentByEmail: (email: string) => Promise<DependentProfile | null>
   logout: () => Promise<void>
@@ -496,7 +387,6 @@ export function useStore(): StoreApi {
       try {
         const { data: { user }, error } = await supabase.auth.getUser()
         if (error || !user) {
-          removeSession()
           if (active) {
             setCurrentUser(null)
             setReady(true)
@@ -505,7 +395,6 @@ export function useStore(): StoreApi {
         }
         const profile = await loadOrCreateAuthenticatedProfile(user)
         if (active) {
-          if (profile) writeSession(profile.email)
           setCurrentUser(profile)
           setReady(true)
         }
@@ -529,7 +418,7 @@ export function useStore(): StoreApi {
       ...data,
       email,
       password: "",
-      cardId: data.cardId?.trim() ?? "",
+      cardId: "",
       allergies: [],
       conditions: [],
       medications: [],
@@ -549,7 +438,8 @@ export function useStore(): StoreApi {
             dob: profile.dob,
             blood_group: profile.bloodGroup,
             gender: profile.gender,
-            card_id: profile.cardId,
+            health_data_consent: true,
+            consent_version: "2026-11-25",
           },
         },
       })
@@ -573,7 +463,6 @@ export function useStore(): StoreApi {
 
       const savedProfile = await loadOrCreateAuthenticatedProfile(authData.user)
       if (!savedProfile) return { ok: false, error: "Your account was created, but its profile could not be loaded." }
-      writeSession(savedProfile.email)
       setCurrentUser(savedProfile)
       return { ok: true }
     } catch (error) {
@@ -601,7 +490,6 @@ export function useStore(): StoreApi {
         await supabase.auth.signOut()
         return { ok: false, error: "Your account profile could not be loaded. Contact support." }
       }
-      writeSession(profile.email)
       setCurrentUser(profile)
       return { ok: true }
     } catch (error) {
@@ -614,29 +502,59 @@ export function useStore(): StoreApi {
     if (!target) return { ok: false, error: "Enter your Card/Tag ID." }
     if (!password) return { ok: false, error: "Enter your password." }
 
+    if (!/^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/i.test(target)) {
+      return { ok: false, error: "Enter a Card ID from LV-1000 to LV-3000." }
+    }
+
     try {
       const response = await fetch("/api/auth/card-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cardId: target, password }),
+        body: JSON.stringify({ cardId: target.toUpperCase(), password }),
       })
       const result = await response.json() as { error?: string; session?: { access_token: string; refresh_token: string } }
       if (!response.ok || !result.session) {
-        return { ok: false, error: result.error ?? "Card/Tag ID or password is incorrect." }
+        return { ok: false, error: result.error ?? "Card ID or password is incorrect." }
       }
-
       const { data, error } = await supabase.auth.setSession(result.session)
-      if (error || !data.user) return { ok: false, error: "Card/Tag ID or password is incorrect." }
+      if (error || !data.user) return { ok: false, error: "Card ID or password is incorrect." }
       const profile = await loadOrCreateAuthenticatedProfile(data.user)
       if (!profile) {
         await supabase.auth.signOut()
         return { ok: false, error: "Your account profile could not be loaded. Contact support." }
       }
-      writeSession(profile.email)
       setCurrentUser(profile)
       return { ok: true }
     } catch {
       return { ok: false, error: "Card/Tag ID or password is incorrect." }
+    }
+  }, [])
+
+  const loginWithPasskey: StoreApi["loginWithPasskey"] = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.auth.signInWithPasskey()
+      if (error || !data.user) {
+        return { ok: false, error: error?.message ?? "Passkey sign-in could not be completed." }
+      }
+      const profile = await loadOrCreateAuthenticatedProfile(data.user)
+      if (!profile) {
+        await supabase.auth.signOut()
+        return { ok: false, error: "Your account profile could not be loaded. Contact support." }
+      }
+      setCurrentUser(profile)
+      return { ok: true }
+    } catch {
+      return { ok: false, error: "Passkey sign-in is unavailable. Enable Passkeys in Supabase Auth settings and try again." }
+    }
+  }, [])
+
+  const registerPasskey: StoreApi["registerPasskey"] = useCallback(async () => {
+    try {
+      const { error } = await supabase.auth.registerPasskey()
+      if (error) return { ok: false, error: error.message }
+      return { ok: true, message: "Passkey added to this account." }
+    } catch {
+      return { ok: false, error: "Passkey setup is unavailable. Enable Passkeys in Supabase Auth settings and try again." }
     }
   }, [])
 
@@ -667,64 +585,12 @@ export function useStore(): StoreApi {
     }
   }, [])
 
-  const getUserByEmail: StoreApi["getUserByEmail"] = useCallback(async (email) => {
-    const key = normalizeEmail(email)
-    if (!key) return null
-
-    try {
-      const loaded = await fetchFullProfileByEmail(key)
-      if (loaded) return loaded.profile
-
-      const { data: depsData, error: dErr } = await supabase.from("dependents").select("*")
-      if (dErr) return null
-
-      const depRow = (depsData ?? []).find(
-        (d) => normalizeEmail(String((d as DependentRow).assigned_email ?? "")) === key
-      ) as DependentRow | undefined
-
-      if (!depRow) return null
-      const parentLoaded = await fetchFullProfileByEmail(depRow.owner_email)
-      if (!parentLoaded) return null
-      return dependentAsUser(parentLoaded.profile, mapDependentRow(depRow))
-    } catch {
-      return null
-    }
-  }, [])
-
-  const findPatientByCardId: StoreApi["findPatientByCardId"] = useCallback(async (cardId) => {
-    const target = normalizeCardId(cardId)
-    if (!target) return null
-
-    try {
-      const { data: profilesData } = await supabase.from("profiles").select("card_id, name")
-      const userMatch = (profilesData ?? []).find(
-        (p) => normalizeCardId(String((p as { card_id?: string }).card_id ?? "")) === target
-      ) as { card_id?: string; name?: string } | undefined
-
-      if (userMatch) {
-        return { kind: "user", cardId: userMatch.card_id ?? "", name: userMatch.name ?? "" }
-      }
-
-      const { data: depsData } = await supabase.from("dependents").select("medi_tag_id, name")
-      const depMatch = (depsData ?? []).find(
-        (d) => normalizeCardId(String((d as { medi_tag_id?: string }).medi_tag_id ?? "")) === target
-      ) as { medi_tag_id?: string; name?: string } | undefined
-
-      if (depMatch) {
-        return { kind: "dependent", cardId: depMatch.medi_tag_id ?? "", name: depMatch.name ?? "" }
-      }
-
-      return null
-    } catch {
-      return null
-    }
-  }, [])
-
   const updateStoredProfile = useCallback(async (update: (profile: UserProfile) => UserProfile) => {
-    const email = readSessionEmail()
-    if (!email) throw new Error("Sign in to update your profile.")
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    const email = normalizeEmail(user?.email ?? "")
+    if (authError || !email) throw new Error("Sign in to update your profile.")
 
-    const { data: linkedRow, error: linkedError } = await supabase.from("dependents").select("*").eq("assigned_email", email).maybeSingle()
+    const { data: linkedRow, error: linkedError } = await supabase.from("dependents").select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id").eq("assigned_email", email).maybeSingle()
     if (linkedError) throw new Error(linkedError.message)
     if (linkedRow) {
       const linkedProfile = dependentAsUser({ email } as UserProfile, mapDependentRow(linkedRow as DependentRow))
@@ -754,7 +620,6 @@ export function useStore(): StoreApi {
         dob: updated.dob,
         blood_group: updated.bloodGroup,
         gender: updated.gender,
-        card_id: updated.cardId,
         allergies: updated.allergies,
         conditions: updated.conditions,
         medications: updated.medications,
@@ -769,58 +634,6 @@ export function useStore(): StoreApi {
 
     const refreshed = await fetchFullProfileByEmail(email)
     setCurrentUser(refreshed ? refreshed.profile : updated)
-  }, [])
-
-  const addReportToCard: StoreApi["addReportToCard"] = useCallback(async (cardId, report, practitioner) => {
-    if (!practitioner) return { ok: false, error: "Practitioner identity is required." }
-    try {
-      const { error } = await supabase.rpc("practitioner_add_report", {
-        p_card_id: normalizeCardId(cardId),
-        p_report: {
-          doctor_name: practitioner.doctorName,
-          specialization: report.specialization,
-          clinic: report.clinic || practitioner.institution,
-          date: report.date,
-          time: report.time,
-          license_number: practitioner.registrationNumber,
-          file_name: report.fileName,
-          notes: report.notes,
-          file_path: report.filePath ?? null,
-          doctor_mmc_id: practitioner.registrationNumber,
-        },
-      })
-      if (error) return { ok: false, error: "The report could not be attached to this patient." }
-
-      return { ok: true }
-    } catch {
-      return { ok: false, error: "The report could not be attached to this patient." }
-    }
-  }, [])
-
-  const verifyCredentials: StoreApi["verifyCredentials"] = useCallback(async (email, password) => {
-    const key = normalizeEmail(email)
-    if (!key || !password) return { ok: false, error: "Enter the child's email and password." }
-
-    try {
-      const loaded = await fetchFullProfileByEmail(key)
-      if (loaded?.row.password_salt && loaded.row.password_hash && (await passwordMatches(password, { salt: loaded.row.password_salt, hash: loaded.row.password_hash }))) {
-        return { ok: true }
-      }
-
-      const { data: depsData, error } = await supabase.from("dependents").select("assigned_email, assigned_password")
-      if (error) return { ok: false, error: error.message }
-
-      const matchedDep = (depsData ?? []).some((d) => {
-        const row = d as { assigned_email?: string; assigned_password?: string }
-        return normalizeEmail(row.assigned_email ?? "") === key && (row.assigned_password ?? "") === password
-      })
-
-      return matchedDep
-        ? { ok: true }
-        : { ok: false, error: "No account matches that email and password." }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Could not verify credentials." }
-    }
   }, [])
 
   const requestPasswordReset: StoreApi["requestPasswordReset"] = useCallback(async (email) => {
@@ -845,28 +658,26 @@ export function useStore(): StoreApi {
     if (!key) return null
 
     try {
-      const { data: depsData, error } = await supabase.from("dependents").select("*")
-      if (error) return null
-
-      const depRow = (depsData ?? []).find(
-        (d) => normalizeEmail(String((d as DependentRow).assigned_email ?? "")) === key
-      ) as DependentRow | undefined
-
-      return depRow ? mapDependentRow(depRow) : null
+      const { data: depRow, error } = await supabase
+        .from("dependents")
+        .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id")
+        .eq("assigned_email", key)
+        .maybeSingle()
+      if (error || !depRow) return null
+      return mapDependentRow(depRow as DependentRow)
     } catch {
       return null
     }
   }, [])
 
   const logout: StoreApi["logout"] = useCallback(async () => {
-    await supabase.auth.signOut()
-    removeSession()
+    await supabase.auth.signOut({ scope: "global" })
     setCurrentUser(null)
   }, [])
-
   const addReport: StoreApi["addReport"] = useCallback(async (report) => {
-    const email = readSessionEmail()
-    if (!email) throw new Error("Sign in to add a report.")
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    const email = normalizeEmail(user?.email ?? "")
+    if (authError || !email) throw new Error("Sign in to add a report.")
 
     const newReport: MedicalReport = { ...report, id: uid(), createdAt: Date.now() }
     const { error } = await supabase.from("medical_reports").insert({
@@ -880,6 +691,8 @@ export function useStore(): StoreApi {
       license_number: newReport.licenseNumber,
       file_name: newReport.fileName,
       notes: newReport.notes,
+      file_path: newReport.filePath ?? null,
+      uploaded_by_role: "patient",
       created_at: newReport.createdAt,
     })
 
@@ -921,11 +734,9 @@ export function useStore(): StoreApi {
     signup: register,
     login,
     loginByCard,
+    loginWithPasskey,
+    registerPasskey,
     getUserByCardId,
-    getUserByEmail,
-    findPatientByCardId,
-    addReportToCard,
-    verifyCredentials,
     requestPasswordReset,
   getDependentByEmail,
   logout,
@@ -958,14 +769,6 @@ export function makeMediTag(): string {
   let code = ""
   for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)]
   return `MT-${code}`
-}
-
-/** Generates a fallback physical Card/Tag ID like "LV-8H3N2" when a user does not supply one. */
-export function makeCardId(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-  let code = ""
-  for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)]
-  return `LV-${code}`
 }
 
 /** Client-side strength check for the parental secret code: 5-12 chars, 1 uppercase, 1 number, 1 special. */

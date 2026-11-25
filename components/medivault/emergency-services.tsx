@@ -163,6 +163,22 @@ export function EmergencyServices() {
           )
         })}
       </div>
+
+      <div className="mt-4 border-t border-border pt-4">
+        <p className="mb-2 text-xs font-semibold text-foreground">Nearby care directory</p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {[
+            { label: "Government hospitals", query: "government hospital" },
+            { label: "Private hospitals", query: "private hospital" },
+          ].map((entry) => {
+            const near = coords ? `${coords.lat},${coords.lng}` : "near me"
+            const query = encodeURIComponent(`${entry.query} near ${near}`)
+            return <a key={entry.label} href={`https://www.google.com/maps/search/?api=1&query=${query}`} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-2 rounded-xl border border-border bg-secondary px-3 py-3 text-xs font-semibold text-foreground"><span>{entry.label}</span><MapPin className="size-4 text-primary" /></a>
+          })}
+          <a href={`tel:${services?.numbers.find((number) => number.icon === "ambulance")?.number ?? "112"}`} className="flex items-center justify-between gap-2 rounded-xl border border-border bg-secondary px-3 py-3 text-xs font-semibold text-foreground"><span>Call ambulance</span><Phone className="size-4 text-destructive" /></a>
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">Hospital links open nearby search results; tap a facility there to call its listed number. Emergency numbers vary by region.</p>
+      </div>
     </section>
   )
 }

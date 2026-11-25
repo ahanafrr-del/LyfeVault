@@ -1,8 +1,8 @@
 "use client"
 
-import { Home, Clock, Bell, User, Plus } from "lucide-react"
+import { Home, Clock, CreditCard, Siren, User, Plus } from "lucide-react"
 
-export type MainTab = "home" | "timeline" | "notifications" | "profile"
+export type MainTab = "home" | "timeline" | "insurance" | "emergency" | "privacy" | "notifications" | "profile"
 
 export function TabBar({
   active,
@@ -19,11 +19,12 @@ export function TabBar({
   const tabs: { id: MainTab; label: string; icon: typeof Home }[] = [
     { id: "home", label: "Home", icon: Home },
     { id: "timeline", label: "Timeline", icon: Clock },
-    { id: "notifications", label: "Alerts", icon: Bell },
+    { id: "insurance", label: "Insurance", icon: CreditCard },
+    { id: "emergency", label: "Emergency", icon: Siren },
     { id: "profile", label: "Profile", icon: User },
   ]
 
-  // Without the FAB, render all four tabs evenly; with it, split around the center button.
+  // Without the FAB, spread the navigation items evenly across the mobile bar.
   if (!showAdd) {
     return (
       <nav className="relative z-30 flex items-center justify-around border-t border-border bg-card px-2 pb-2 pt-2.5">
@@ -72,6 +73,7 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
+      aria-current={active ? "page" : undefined}
       className={`flex flex-1 flex-col items-center gap-0.5 py-1 text-[11px] font-medium transition-colors ${
         active ? "text-primary" : "text-muted-foreground"
       }`}
