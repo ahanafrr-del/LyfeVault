@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { AlertCircle, Ambulance, CalendarDays, KeyRound, Lock, Mail, User, Tag, Stethoscope, Fingerprint } from "lucide-react"
+import { AlertCircle, Ambulance, CalendarDays, Lock, Mail, User, Tag, Stethoscope, Fingerprint } from "lucide-react"
 import { Logo } from "./shared"
 import { PractitionerScan, type PractitionerSession } from "./practitioner-scan"
 import { EmergencyLookupModal } from "./emergency-lookup"
@@ -36,7 +36,6 @@ export function AuthScreen({
   const [customCardId, setCustomCardId] = useState("")
   const [name, setName] = useState("")
   const [dob, setDob] = useState("")
-  const [parentalMasterKey, setParentalMasterKey] = useState("")
   const age = computeAge(dob)
   /** Required health-data consent is submitted to Supabase with the account registration. */
   const [agreeTerms, setAgreeTerms] = useState(false)
@@ -61,7 +60,6 @@ export function AuthScreen({
       } else {
         if (!name.trim() || !email.trim() || !password || !dob) return setError("Enter your name, date of birth, email, and password.")
         if (customCardId && !/^(1000|1[0-9]{3}|2[0-9]{3}|3000)$/.test(customCardId)) return setError("Card ID must be from LV-1000 through LV-3000.")
-        if (age !== null && age < 18 && !parentalMasterKey) return setError("Set a Parental Master Key for this minor account.")
         if (!agreeTerms)
           return setError("Consent to the Privacy Policy and health-data processing is required to register.")
         const res = await store.register({
@@ -70,7 +68,6 @@ export function AuthScreen({
           password,
           dob,
           cardId: customCardId ? `LV-${customCardId}` : undefined,
-          parentalMasterKey: age !== null && age < 18 ? parentalMasterKey : undefined,
         })
         if (!res.ok) return setError(res.error ?? "Sign up failed.")
         if (res.pendingConfirmation) {
@@ -170,21 +167,6 @@ export function AuthScreen({
                 onChange={(e) => setCustomCardId(e.target.value.replace(/\D/g, "").slice(0, 4))}
               />
             </div>
-            {age !== null && age < 18 && (
-              <Field icon={<KeyRound className="h-4 w-4" />}>
-                <input
-                  type="password"
-                  className={inputClass}
-                  placeholder="Parental Master Key"
-                  autoComplete="new-password"
-                  minLength={10}
-                  required
-                  value={parentalMasterKey}
-                  onChange={(e) => setParentalMasterKey(e.target.value)}
-                />
-              </Field>
-            )}
-            {age !== null && age < 18 && <p className="-mt-2 px-1 text-xs leading-relaxed text-muted-foreground">Use 10+ characters with an uppercase letter, number, and symbol. Only a salted password hash is stored; the key itself is never saved.</p>}
           </>
         )}
 

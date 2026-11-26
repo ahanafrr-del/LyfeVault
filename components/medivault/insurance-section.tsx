@@ -43,23 +43,30 @@ const blankDraft: InsuranceDraft = {
   is_active: true,
 }
 
-async function loadInsurance() {
+async function loadInsurance(guardianDependentId?: string) {
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) throw new Error("Sign in to view health insurance.")
+  let targetUserId = user.id
+  if (guardianDependentId) {
+    const { data, error } = await supabase.rpc("guardian_dependent_user_id", { p_dependent_id: guardianDependentId })
+    if (error || typeof data !== "string") throw new Error("Guardian access is not verified or the dependent account is unavailable.")
+    targetUserId = data
+  }
   const [{ data: policy, error: policyError }, { data: settings }] = await Promise.all([
-    supabase.from("health_insurance").select("*").eq("user_id", user.id).maybeSingle(),
-    supabase.from("user_privacy_settings").select("mask_sensitive_fields").eq("user_id", user.id).maybeSingle(),
+    supabase.from("health_insurance").select("*").eq("user_id", targetUserId).maybeSingle(),
+    supabase.from("user_privacy_settings").select("mask_sensitive_fields").eq("user_id", targetUserId).maybeSingle(),
   ])
   if (policyError) throw policyError
-  return { userId: user.id, policy: policy as InsuranceRecord | null, maskedByDefault: settings?.mask_sensitive_fields ?? true }
+  return { userId: targetUserId, policy: policy as InsuranceRecord | null, maskedByDefault: settings?.mask_sensitive_fields ?? true }
 }
 
 function maskValue(value: string): string {
   return value ? `••••••${value.slice(-4)}` : "Not provided"
 }
 
-export function InsuranceSection({ readOnly = false }: { readOnly?: boolean }) {
-  const { data, error, isLoading, mutate } = useSWR("lyfevault-insurance", loadInsurance)
+export function InsuranceSection({ readOnly = false, guardianDependentId }: { readOnly?: boolean; guardianDependentId?: string }) {
+  const cacheKey = guardianDependentId ? `lyfevault-insurance-${guardianDependentId}` : "lyfevault-insurance"
+  const { data, error, isLoading, mutate } = useSWR(cacheKey, () => loadInsurance(guardianDependentId))
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<InsuranceDraft | null>(null)
   const [ecard, setEcard] = useState<File | null>(null)

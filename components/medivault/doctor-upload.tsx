@@ -23,10 +23,12 @@ export function DoctorUpload({
   store,
   onClose,
   onDone,
+  dependentId,
 }: {
   store: StoreApi
   onClose: () => void
   onDone: () => void
+  dependentId?: string
 }) {
   const [doctorName, setDoctorName] = useState("")
   const [specialization, setSpecialization] = useState("")
@@ -102,6 +104,7 @@ export function DoctorUpload({
         fileName: fileName || "report.pdf",
         notes: notes.trim(),
         filePath,
+        dependentId,
       })
       onDone()
     } catch {

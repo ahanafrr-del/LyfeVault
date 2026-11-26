@@ -3,14 +3,17 @@
 import { AlertTriangle, Phone, HeartPulse, Pill, Activity, UserX } from "lucide-react"
 import { ScreenHeader, EmptyState } from "./shared"
 import { EmergencyServices } from "./emergency-services"
+import { EmergencyIncidentLog } from "./emergency-incident-log"
 import { computeAge, type UserProfile } from "@/lib/store"
 
 export function EmergencyView({
   profile,
   onBack,
+  allowIncidentLogging = false,
 }: {
   profile: UserProfile | null
   onBack: () => void
+  allowIncidentLogging?: boolean
 }) {
   const age = profile ? computeAge(profile.dob) : null
   const initials = profile?.name
@@ -112,6 +115,7 @@ export function EmergencyView({
 
           {/* Proximity-based emergency dispatch */}
           <EmergencyServices />
+          {allowIncidentLogging && <EmergencyIncidentLog />}
         </div>
       )}
     </div>
