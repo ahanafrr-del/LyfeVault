@@ -8,8 +8,8 @@ import { ModalShell } from "./shared"
 
 type PrivacySettings = {
   userId: string
-  mask_sensitive_fields: boolean
-  practitioner_insurance_visible: boolean
+  mask_insurance_by_default: boolean
+  share_insurance_in_practitioner_view: boolean
   consent_active: boolean
 }
 
@@ -27,8 +27,8 @@ async function loadPrivacy() {
   return {
     settings: {
       userId: user.id,
-      mask_sensitive_fields: settings?.mask_sensitive_fields ?? true,
-      practitioner_insurance_visible: settings?.practitioner_insurance_visible ?? false,
+      mask_insurance_by_default: settings?.mask_insurance_by_default ?? settings?.mask_sensitive_fields ?? true,
+      share_insurance_in_practitioner_view: settings?.share_insurance_in_practitioner_view ?? settings?.practitioner_insurance_visible ?? false,
       consent_active: settings?.consent_active ?? true,
     } as PrivacySettings,
     activity: (activity ?? []) as PrivacyLog[],
@@ -58,15 +58,19 @@ export function PrivacySection({ onLogout, readOnly = false }: { onLogout: () =>
     setBusy(true)
     setNotice(null)
     const updated = { ...data.settings, ...patch }
+    await mutate({ ...data, settings: updated }, { revalidate: false })
     const { error: saveError } = await supabase.from("user_privacy_settings").upsert({
       user_id: updated.userId,
-      mask_sensitive_fields: updated.mask_sensitive_fields,
-      practitioner_insurance_visible: updated.practitioner_insurance_visible,
+      mask_insurance_by_default: updated.mask_insurance_by_default,
+      share_insurance_in_practitioner_view: updated.share_insurance_in_practitioner_view,
+      mask_sensitive_fields: updated.mask_insurance_by_default,
+      practitioner_insurance_visible: updated.share_insurance_in_practitioner_view,
       consent_active: updated.consent_active,
       consent_updated_at: action === "consent_withdrawn" ? new Date().toISOString() : undefined,
       updated_at: new Date().toISOString(),
     }, { onConflict: "user_id" })
     if (saveError) {
+      await mutate(data, { revalidate: false })
       setNotice(saveError.message)
       setBusy(false)
       return
@@ -84,15 +88,16 @@ export function PrivacySection({ onLogout, readOnly = false }: { onLogout: () =>
     try {
       const { data: { user }, error: authError } = await supabase.auth.getUser()
       if (authError || !user) throw new Error("Sign in to export your data.")
-      const [profile, dependents, reports, insurance, settings, audit] = await Promise.all([
+      const [profile, dependents, reports, insurance, settings, audit, incidents] = await Promise.all([
         supabase.from("profiles").select("auth_user_id,email,name,dob,blood_group,gender,card_id,allergies,conditions,medications,contacts,updated_at").eq("auth_user_id", user.id).maybeSingle(),
         supabase.from("dependents").select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id,dependent_type").eq("guardian_id", user.id),
         supabase.from("medical_reports").select("*").eq("owner_email", user.email ?? ""),
         supabase.from("health_insurance").select("*").eq("user_id", user.id).maybeSingle(),
         supabase.from("user_privacy_settings").select("*").eq("user_id", user.id).maybeSingle(),
         supabase.from("privacy_audit_logs").select("*").eq("user_id", user.id),
+        supabase.from("emergency_incidents").select("id,incident_type,occurred_at,location,description,photo_path,created_at").eq("user_id", user.id).order("occurred_at", { ascending: false }),
       ])
-      const failures = [profile.error, dependents.error, reports.error, insurance.error, settings.error, audit.error].filter(Boolean)
+      const failures = [profile.error, dependents.error, reports.error, insurance.error, settings.error, audit.error, incidents.error].filter(Boolean)
       if (failures.length) throw new Error("Some records could not be exported. Please try again.")
       const payload = {
         exportedAt: new Date().toISOString(),
@@ -102,7 +107,8 @@ export function PrivacySection({ onLogout, readOnly = false }: { onLogout: () =>
         healthInsurance: insurance.data,
         privacySettings: settings.data,
         privacyActivity: audit.data,
-        fileNote: "Private file contents are not embedded in JSON. E-card and report file paths are included in the records.",
+        emergencyIncidents: incidents.data,
+        fileNote: "Private file contents are not embedded in JSON. E-card, report, and incident photo paths are included in the records.",
       }
       const { error: logError } = await supabase.rpc("log_privacy_activity", { p_action: "data_export", p_details: { format: "json" } })
       if (logError) throw new Error("The export could not be recorded. Please try again.")
@@ -159,9 +165,9 @@ export function PrivacySection({ onLogout, readOnly = false }: { onLogout: () =>
         <div className="flex flex-col gap-6">
           <section className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">
             <div className="mb-4 flex items-center gap-3"><span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary"><LockKeyhole className="size-5" /></span><div><h2 className="font-bold text-foreground">Privacy settings</h2><p className="text-xs text-muted-foreground">Your choices are stored in your protected account settings.</p></div></div>
-            <SettingRow title="Mask sensitive insurance numbers by default" description="Policy, member, and group numbers are hidden until you reveal them." checked={settings?.mask_sensitive_fields ?? true} disabled={busy || readOnly} onChange={(checked) => void saveSettings({ mask_sensitive_fields: checked })} />
-            <SettingRow title="Share an insurance summary with verified practitioners" description="Only the active plan summary is shared; identifiers stay masked. Turn off any time." checked={settings?.practitioner_insurance_visible ?? false} disabled={busy || readOnly || !canWithdraw} onChange={(checked) => void saveSettings({ practitioner_insurance_visible: checked })} />
-            <div className="mt-4 rounded-2xl bg-secondary p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-foreground">Health-data consent</p><p className="mt-1 text-xs text-muted-foreground">{canWithdraw ? "Consent is active for your medical passport and emergency access." : "Consent has been withdrawn; optional practitioner insurance visibility is disabled."}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${canWithdraw ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground"}`}>{canWithdraw ? "Active" : "Withdrawn"}</span></div>{canWithdraw && !readOnly && <button type="button" disabled={busy} onClick={() => void saveSettings({ consent_active: false, practitioner_insurance_visible: false }, "consent_withdrawn")} className="mt-3 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-semibold text-destructive disabled:opacity-50">Withdraw consent</button>}</div>
+            <SettingRow title="Mask sensitive insurance numbers by default" description="Policy, member, and group numbers are hidden until you reveal them." checked={settings?.mask_insurance_by_default ?? true} disabled={busy || readOnly} onChange={(checked) => void saveSettings({ mask_insurance_by_default: checked })} />
+            <SettingRow title="Share an insurance summary with verified practitioners" description="Only the active plan summary is shared; identifiers stay masked. Turn off any time." checked={settings?.share_insurance_in_practitioner_view ?? false} disabled={busy || readOnly || !canWithdraw} onChange={(checked) => void saveSettings({ share_insurance_in_practitioner_view: checked })} />
+            <div className="mt-4 rounded-2xl bg-secondary p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-foreground">Health-data consent</p><p className="mt-1 text-xs text-muted-foreground">{canWithdraw ? "Consent is active for your medical passport and emergency access." : "Consent has been withdrawn; optional practitioner insurance visibility is disabled."}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${canWithdraw ? "bg-accent/15 text-accent" : "bg-muted text-muted-foreground"}`}>{canWithdraw ? "Active" : "Withdrawn"}</span></div>{canWithdraw && !readOnly && <button type="button" disabled={busy} onClick={() => void saveSettings({ consent_active: false, share_insurance_in_practitioner_view: false }, "consent_withdrawn")} className="mt-3 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-semibold text-destructive disabled:opacity-50">Withdraw consent</button>}</div>
           </section>
 
           <section className="rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">

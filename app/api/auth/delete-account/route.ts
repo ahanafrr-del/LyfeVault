@@ -19,12 +19,13 @@ export async function POST() {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 
-  const [{ data: insurance, error: insuranceError }, { data: ownedReports, error: reportsError }, { data: dependents, error: dependentsError }] = await Promise.all([
+  const [{ data: insurance, error: insuranceError }, { data: ownedReports, error: reportsError }, { data: dependents, error: dependentsError }, { data: incidents, error: incidentsError }] = await Promise.all([
     admin.from("health_insurance").select("ecard_path").eq("user_id", user.id).maybeSingle(),
     admin.from("medical_reports").select("file_path").eq("owner_email", user.email),
     admin.from("dependents").select("id").eq("guardian_id", user.id),
+    admin.from("emergency_incidents").select("photo_path").eq("user_id", user.id),
   ])
-  if (insuranceError || reportsError || dependentsError) {
+  if (insuranceError || reportsError || dependentsError || incidentsError) {
     return NextResponse.json({ error: "Account records could not be prepared for deletion." }, { status: 500 })
   }
 
@@ -37,12 +38,17 @@ export async function POST() {
   }
 
   const insurancePaths = insurance?.ecard_path ? [insurance.ecard_path] : []
+  const incidentPaths = (incidents ?? []).map((incident) => incident.photo_path).filter((path): path is string => typeof path === "string" && path.length > 0)
   const reportPaths = [...(ownedReports ?? []), ...(dependentReports ?? [])]
     .map((report) => report.file_path)
     .filter((path): path is string => typeof path === "string" && path.length > 0)
   if (insurancePaths.length) {
     const { error } = await admin.storage.from("insurance-ecards").remove(insurancePaths)
     if (error) return NextResponse.json({ error: "Private insurance files could not be deleted." }, { status: 500 })
+  }
+  if (incidentPaths.length) {
+    const { error } = await admin.storage.from("emergency-incidents").remove(incidentPaths)
+    if (error) return NextResponse.json({ error: "Emergency incident photos could not be deleted." }, { status: 500 })
   }
   if (reportPaths.length) {
     const { error } = await admin.storage.from("medical-reports").remove(reportPaths)

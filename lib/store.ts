@@ -25,6 +25,7 @@ export type MedicalReport = {
   fileUrl?: string
   uploadedByRole?: "patient" | "practitioner"
   doctorMmcId?: string
+  dependentId?: string
 }
 
 export type DependentProfile = {
@@ -96,6 +97,7 @@ type ReportRow = {
   file_path?: string | null
   uploaded_by_role?: "patient" | "practitioner" | null
   doctor_mmc_id?: string | null
+  dependent_id?: string | null
 }
 
 type DependentRow = {
@@ -216,6 +218,7 @@ function mapReportRow(row: ReportRow): MedicalReport {
     filePath: row.file_path ?? undefined,
     uploadedByRole: row.uploaded_by_role ?? "patient",
     doctorMmcId: row.doctor_mmc_id ?? undefined,
+    dependentId: row.dependent_id ?? undefined,
   }
 }
 
@@ -435,13 +438,6 @@ export function useStore(): StoreApi {
     if (customCardId && !/^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/i.test(customCardId)) {
       return { ok: false, error: "Card ID must be LV-1000 through LV-3000." }
     }
-    if (age < 18 && !data.parentalMasterKey) return { ok: false, error: "A Parental Master Key is required for accounts under 18." }
-    if (age < 18 && data.parentalMasterKey && !/^(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{10,64}$/.test(data.parentalMasterKey)) {
-      return { ok: false, error: "Use 10–64 characters with an uppercase letter, number, and symbol for the Parental Master Key." }
-    }
-
-    const masterKeySalt = age < 18 ? bytesToHex(crypto.getRandomValues(new Uint8Array(16))) : ""
-    const masterKeyHash = age < 18 ? await hashParentalKey(data.parentalMasterKey!, masterKeySalt) : ""
     const profile = normalizeUser({
       ...data,
       email,
@@ -467,8 +463,6 @@ export function useStore(): StoreApi {
             blood_group: profile.bloodGroup,
             gender: profile.gender,
             custom_card_id: customCardId ? customCardId.toUpperCase() : "",
-            parental_master_key_salt: masterKeySalt,
-            parental_master_key_hash: masterKeyHash,
             health_data_consent: true,
             consent_version: "2026-11-25",
           },
@@ -735,6 +729,7 @@ export function useStore(): StoreApi {
       notes: newReport.notes,
       file_path: newReport.filePath ?? null,
       uploaded_by_role: "patient",
+      dependent_id: newReport.dependentId ?? null,
       created_at: newReport.createdAt,
     })
 
@@ -753,13 +748,27 @@ export function useStore(): StoreApi {
   }, [])
 
   const updateDependent: StoreApi["updateDependent"] = useCallback(async (id, partial) => {
-    await updateStoredProfile((profile) => ({
-      ...profile,
-      dependents: profile.dependents.map((dependent) => dependent.id === id
-        ? { ...dependent, ...partial, id, assignedEmail: normalizeEmail(partial.assignedEmail ?? dependent.assignedEmail) }
-        : dependent),
-    }))
-  }, [updateStoredProfile])
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    const email = normalizeEmail(user?.email ?? "")
+    if (authError || !email) throw new Error("Sign in to update this dependent.")
+    const loaded = await fetchFullProfileByEmail(email)
+    const dependent = loaded?.profile.dependents.find((item) => item.id === id)
+    if (!dependent) throw new Error("The linked dependent could not be found.")
+    const updated = { ...dependent, ...partial, id, assignedEmail: normalizeEmail(partial.assignedEmail ?? dependent.assignedEmail) }
+    const { error } = await supabase.from("dependents").update({
+      name: updated.name,
+      dob: updated.dob,
+      relationship: updated.relationship,
+      blood_group: updated.bloodGroup,
+      allergies: updated.allergies,
+      conditions: updated.conditions,
+      medications: updated.medications,
+      contacts: updated.contacts,
+    }).eq("id", id).eq("owner_email", email)
+    if (error) throw new Error(error.message)
+    const refreshed = await fetchFullProfileByEmail(email)
+    if (refreshed) setCurrentUser(refreshed.profile)
+  }, [])
 
   const removeDependent: StoreApi["removeDependent"] = useCallback(async (id) => {
     await updateStoredProfile((profile) => ({

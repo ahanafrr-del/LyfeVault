@@ -18,7 +18,6 @@ import { Departments } from "@/components/medivault/departments"
 import { DependentsDirectory } from "@/components/medivault/dependents-directory"
 import { DoctorUpload } from "@/components/medivault/doctor-upload"
 import { ProfileScreen } from "@/components/medivault/profile-screen"
-import { ParentalMasterAccess } from "@/components/medivault/parental-master-access"
 import { ClinicalMode } from "@/components/medivault/clinical-mode"
 import type { PractitionerSession } from "@/components/medivault/practitioner-scan"
 import { supabase } from "@/lib/supabase"
@@ -36,8 +35,6 @@ export default function Page() {
   const [subScreen, setSubScreen] = useState<SubScreen>(null)
   // Verified practitioner session powering Approved Clinical Mode.
   const [practitioner, setPractitioner] = useState<PractitionerSession | null>(null)
-  // True once a guardian unlocks parental edit mode on a minor's dashboard — reveals the upload FAB.
-  const [minorUnlocked, setMinorUnlocked] = useState(false)
   // A specific profile resolved via the top-bar Card/Tag ID lookup. When set, the Emergency
   // View (Screen 2) renders this responder-targeted record instead of the local snapshot.
   const [emergencyTarget, setEmergencyTarget] = useState<UserProfile | null>(null)
@@ -75,7 +72,6 @@ export default function Page() {
     setTab("home")
     setSubScreen(null)
     setOverlay(null)
-    setMinorUnlocked(false)
   }
 
   // Opens the read-only Emergency View (Screen 2). When called with a profile resolved from a
@@ -161,7 +157,6 @@ export default function Page() {
 
     return (
       <div className="flex h-full flex-col">
-        {minor && <ParentalMasterAccess store={store} unlocked={minorUnlocked} onChange={setMinorUnlocked} />}
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full">
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -169,11 +164,8 @@ export default function Page() {
                 (minor ? (
                   // Screen 3b — strict view-only layout, no bento grid, no FAB.
                   <MinorDashboard
-                    store={store}
                     user={user}
-                    unlocked={minorUnlocked}
                     onNotifications={() => setTab("notifications")}
-                    onEditModeChange={setMinorUnlocked}
                   />
                 ) : (
                   <Dashboard
@@ -183,9 +175,9 @@ export default function Page() {
                   />
                 ))}
               {tab === "timeline" && <Timeline user={user} showBack={false} />}
-              {tab === "insurance" && <InsuranceSection readOnly={minor && !minorUnlocked} />}
-              {tab === "emergency" && <EmergencyView profile={user} onBack={() => setTab("home")} />}
-              {tab === "privacy" && <PrivacySection onLogout={handleLogout} readOnly={minor && !minorUnlocked} />}
+              {tab === "insurance" && <InsuranceSection readOnly={minor} />}
+              {tab === "emergency" && <EmergencyView profile={user} onBack={() => setTab("home")} allowIncidentLogging={!minor} />}
+              {tab === "privacy" && <PrivacySection onLogout={handleLogout} readOnly={minor} />}
               {tab === "notifications" && (
                 <div className="flex h-full flex-col bg-secondary">
                   <ScreenHeader title="Alerts" subtitle="Reminders & updates" />
@@ -197,13 +189,13 @@ export default function Page() {
                 </div>
               )}
               {tab === "profile" && (
-                <ProfileScreen store={store} user={user} unlocked={minorUnlocked} onLogout={handleLogout} onPrivacy={() => setTab("privacy")} />
+                <ProfileScreen store={store} user={user} onLogout={handleLogout} onPrivacy={() => setTab("privacy")} />
               )}
             </div>
           </div>
         </div>
 
-        {overlay === "upload" && (!minor || minorUnlocked) && (
+        {overlay === "upload" && !minor && (
           <DoctorUpload
             store={store}
             onClose={() => setOverlay(null)}
@@ -227,7 +219,7 @@ export default function Page() {
             onNavigate={setTab}
             onLogout={handleLogout}
             onAdd={() => setOverlay("upload")}
-            showAdd={!minor || minorUnlocked}
+            showAdd={!minor}
           >
             {renderPhoneContent()}
           </AppShell>
