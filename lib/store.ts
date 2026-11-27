@@ -71,19 +71,7 @@ export type UserProfile = {
   dependents: DependentProfile[]
 }
 
-type Result = { ok: boolean; error?: string; message?: string; pendingConfirmation?: boolean; canResendConfirmation?: boolean }
-
-function confirmationEmailError(error: { code?: string; message: string }): Result | null {
-  const code = error.code?.toLowerCase() ?? ""
-  const message = error.message.toLowerCase()
-  if (code.includes("rate_limit") || message.includes("rate limit") || message.includes("too many")) {
-    return { ok: false, error: "Confirmation email rate limit reached. Wait a few minutes, then use Resend confirmation email below.", canResendConfirmation: true }
-  }
-  if (["email_address_not_authorized", "smtp_error", "email_provider_disabled"].includes(code) || message.includes("sending confirmation email") || message.includes("email delivery")) {
-    return { ok: false, error: "Supabase could not deliver the confirmation email. Check the address and try resending later; if it continues, email delivery needs attention.", canResendConfirmation: true }
-  }
-  return null
-}
+type Result = { ok: boolean; error?: string; message?: string }
 
 type ProfileRow = {
   auth_user_id: string | null
@@ -313,9 +301,9 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   return { row, profile }
 }
 
-async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: string; email_confirmed_at?: string | null; user_metadata?: Record<string, unknown> }): Promise<UserProfile | null> {
+async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: string; user_metadata?: Record<string, unknown> }): Promise<UserProfile | null> {
   const email = normalizeEmail(user.email ?? "")
-  if (!email || !user.email_confirmed_at) return null
+  if (!email) return null
 
   const { data: linkedRow, error: linkedError } = await supabase
     .from("dependents")
@@ -412,7 +400,6 @@ export type StoreApi = {
   emergencyProfile: UserProfile | null
   register: (data: AuthData) => Promise<Result>
   signup: (data: AuthData) => Promise<Result>
-  resendSignupConfirmation: (email: string) => Promise<Result>
   login: (email: string, password: string) => Promise<Result>
   loginByCard: (cardId: string, password: string) => Promise<Result>
   loginWithPasskey: () => Promise<Result>
@@ -520,44 +507,25 @@ export function useStore(): StoreApi {
         if (message.includes("already registered") || message.includes("already been registered")) {
           return { ok: false, error: "Unable to create the account with these details. Try signing in instead." }
         }
-        return confirmationEmailError(error) ?? { ok: false, error: error.message }
+        return { ok: false, error: "Account creation could not be completed. Check your details and try again." }
       }
       if (!authData.user) return { ok: false, error: "Account creation could not be completed. Try again." }
 
-      if (!authData.session || !authData.user.email_confirmed_at) {
-        return {
-          ok: true,
-          pendingConfirmation: true,
-          canResendConfirmation: true,
-          message: "Account created. Confirm your email using the link we sent, then sign in to finish setting up your profile.",
+      let authenticatedUser = authData.user
+      if (!authData.session) {
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+        if (signInError || !signInData.session || !signInData.user) {
+          return { ok: false, error: "Could not sign in immediately after sign-up. Check your Supabase Auth configuration and try again." }
         }
+        authenticatedUser = signInData.user
       }
 
-      const savedProfile = await loadOrCreateAuthenticatedProfile(authData.user)
+      const savedProfile = await loadOrCreateAuthenticatedProfile(authenticatedUser)
       if (!savedProfile) return { ok: false, error: "Your account was created, but its profile could not be loaded." }
       setCurrentUser(savedProfile)
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Could not create the account." }
-    }
-  }, [])
-
-  const resendSignupConfirmation: StoreApi["resendSignupConfirmation"] = useCallback(async (email) => {
-    const key = normalizeEmail(email)
-    if (!key) return { ok: false, error: "Enter your email address first." }
-
-    try {
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email: key,
-        options: {
-          emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback`,
-        },
-      })
-      if (error) return confirmationEmailError(error) ?? { ok: false, error: "Could not resend the confirmation email. Try again later.", canResendConfirmation: true }
-      return { ok: true, message: "Confirmation email sent. Check your inbox and spam folder." }
-    } catch {
-      return { ok: false, error: "Could not resend the confirmation email. Check your connection and try again.", canResendConfirmation: true }
     }
   }, [])
 
@@ -567,13 +535,7 @@ export function useStore(): StoreApi {
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: key, password })
-      if (error) {
-        const message = error.message.toLowerCase()
-        if (message.includes("email not confirmed")) {
-          return { ok: false, error: "Confirm your email using the link we sent before signing in." }
-        }
-        return { ok: false, error: "Email or password is incorrect." }
-      }
+      if (error) return { ok: false, error: "Email or password is incorrect." }
       if (!data.user) return { ok: false, error: "Email or password is incorrect." }
 
       const profile = await loadOrCreateAuthenticatedProfile(data.user)
@@ -850,7 +812,6 @@ export function useStore(): StoreApi {
     emergencyProfile: currentUser,
     register,
     signup: register,
-    resendSignupConfirmation,
     login,
     loginByCard,
     loginWithPasskey,
