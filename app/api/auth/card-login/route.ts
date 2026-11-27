@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   const values = body && typeof body === "object" ? body as Record<string, unknown> : {}
   const cardId = typeof values.cardId === "string" ? values.cardId.trim().toUpperCase() : ""
   const password = typeof values.password === "string" ? values.password : ""
-  if (!/^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/.test(cardId) || !password || password.length > 256) {
+  if (!/^LV-(1[0-9]{3}|2000)$/.test(cardId) || !password || password.length > 256) {
     return NextResponse.json({ error: "Card ID or password is incorrect." }, { status: 401 })
   }
 

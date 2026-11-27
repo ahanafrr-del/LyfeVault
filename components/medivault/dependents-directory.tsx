@@ -17,10 +17,11 @@ type FormState = {
   relationship: string
   dependentType: "child" | "adult"
   secretCode: string
+  cardId: string
   otp: string
 }
 
-const EMPTY_FORM: FormState = { name: "", email: "", dob: "", bloodGroup: "", relationship: "Child", dependentType: "child", secretCode: "", otp: "" }
+const EMPTY_FORM: FormState = { name: "", email: "", dob: "", bloodGroup: "", relationship: "Child", dependentType: "child", secretCode: "", cardId: "", otp: "" }
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
@@ -69,10 +70,19 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
 
   async function beginEmailApproval() {
     setError(null)
-    if (!form.name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
-      setError("Enter the dependent's name and a valid email address.")
+    if (!form.name.trim() || !form.dob || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      setError("Enter the dependent's name, date of birth, and a valid email address.")
       return
     }
+    const dependentCardId = `LV-${form.cardId.trim()}`
+    if (!/^LV-(1[0-9]{3}|2000)$/.test(dependentCardId)) {
+      setError("Choose a Card ID from LV-1000 through LV-2000.")
+      return
+    }
+    const availabilityResponse = await fetch("/api/auth/card-availability", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cardId: dependentCardId }) }).catch(() => null)
+    if (!availabilityResponse?.ok) { setError("Card ID availability could not be verified. Try again."); return }
+    const availability = await availabilityResponse.json() as { available?: boolean }
+    if (!availability.available) { setError("That Card ID is already claimed. Choose another one."); return }
     const secret = validateParentalCode(form.secretCode)
     if (!secret.ok) { setError(secret.error ?? "Choose a valid secret access code."); return }
     setBusy(true)
@@ -105,7 +115,7 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
 
   async function completeEmailApproval() {
     if (!requestId || !guardianSession) return setError("Your approval session expired. Restart the request.")
-    if (!/^\d{6}$/.test(form.otp)) return setError("Enter the six-digit Gmail verification code.")
+    if (!/^\d{6}$/.test(form.otp)) return setError("Enter the six-digit email verification code.")
     const validation = validateParentalCode(form.secretCode)
     if (!validation.ok) return setError(validation.error ?? "Choose a valid secret access code.")
     setBusy(true)
@@ -120,11 +130,15 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
       if (linkError || !dependentId) throw new Error("The dependent could not be linked. Verify that the code belongs to this request.")
       const { error: restoreError } = await supabase.auth.setSession({ access_token: guardianSession.accessToken, refresh_token: guardianSession.refreshToken })
       if (restoreError) throw new Error("Restore your guardian session and retry the access key setup.")
+      const guardianMasterKeyHash = await sha256Hex(form.secretCode)
       const { error: keyError } = await supabase.rpc("set_guardian_access_key", {
         p_dependent_id: String(dependentId),
-        p_key_sha256: await sha256Hex(form.secretCode),
+        p_key_sha256: guardianMasterKeyHash,
       })
       if (keyError) throw new Error("The account was linked, but guardian access key setup did not complete. Edit the dependent to retry.")
+      const dependentCardId = `LV-${form.cardId.trim()}`
+      const { error: cardError } = await supabase.from("dependents").update({ card_id: dependentCardId, guardian_master_key_hash: guardianMasterKeyHash }).eq("id", String(dependentId))
+      if (cardError) throw new Error("The dependent was linked, but their Card ID could not be saved. Retry from Edit Dependent.")
       await supabase.auth.setSession({ access_token: guardianSession.accessToken, refresh_token: guardianSession.refreshToken })
       closeModal()
       window.location.reload()
@@ -148,10 +162,11 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
     try {
       await store.updateDependent(editing.id, { name: form.name.trim(), dob: form.dob, bloodGroup: form.bloodGroup, relationship: form.relationship })
       if (form.secretCode) {
-        const { error: secretError } = await supabase.rpc("update_dependent_secret_code", { p_dependent_id: editing.id, p_secret_code: form.secretCode })
-        if (secretError) throw new Error("The Guardian Master Access Key could not be updated.")
-        const { error: guardianKeyError } = await supabase.rpc("set_guardian_access_key", { p_dependent_id: editing.id, p_key_sha256: await sha256Hex(form.secretCode) })
+        const guardianMasterKeyHash = await sha256Hex(form.secretCode)
+        const { error: guardianKeyError } = await supabase.rpc("set_guardian_access_key", { p_dependent_id: editing.id, p_key_sha256: guardianMasterKeyHash })
         if (guardianKeyError) throw new Error("The Guardian Master Access Key could not be updated.")
+        const { error: hashError } = await supabase.from("dependents").update({ guardian_master_key_hash: guardianMasterKeyHash }).eq("id", editing.id)
+        if (hashError) throw new Error("The Guardian Master Access Key hash could not be saved.")
       }
       closeModal()
       window.location.reload()
@@ -248,7 +263,8 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
               }}><option value="child">Child dependent</option><option value="adult">Adult dependent</option></select></label>}
               <FormField label="Full name" icon={<User className="size-4" />}><input className={INPUT} value={form.name} onChange={(event) => set("name", event.target.value)} /></FormField>
               {!editing && <FormField label="Dependent email" icon={<Mail className="size-4" />}><input type="email" className={INPUT} autoComplete="email" placeholder="name@gmail.com" value={form.email} onChange={(event) => set("email", event.target.value)} /></FormField>}
-              <div className="grid grid-cols-2 gap-3"><FormField label="Date of birth" icon={<Baby className="size-4" />}><input type="date" className={INPUT} value={form.dob} onChange={(event) => set("dob", event.target.value)} /></FormField><FormField label="Blood group" icon={<KeyRound className="size-4" />}><select className={INPUT} value={form.bloodGroup} onChange={(event) => set("bloodGroup", event.target.value)}><option value="">Select</option>{["A+","A-","B+","B-","AB+","AB-","O+","O-"].map((group) => <option key={group}>{group}</option>)}</select></FormField></div>
+              <div className="grid grid-cols-2 gap-3"><FormField label="Date of birth" icon={<Baby className="size-4" />}><input type="date" required className={INPUT} value={form.dob} onChange={(event) => set("dob", event.target.value)} /></FormField><FormField label="Blood group" icon={<KeyRound className="size-4" />}><select className={INPUT} value={form.bloodGroup} onChange={(event) => set("bloodGroup", event.target.value)}><option value="">Select</option>{["A+","A-","B+","B-","AB+","AB-","O+","O-"].map((group) => <option key={group}>{group}</option>)}</select></FormField></div>
+              {!editing && <FormField label="Card ID (LV-1000 to LV-2000)" icon={<Tag className="size-4" />}><input className={INPUT} inputMode="numeric" pattern="(1[0-9]{3}|2000)" maxLength={4} required placeholder="1000" value={form.cardId} onChange={(event) => set("cardId", event.target.value.replace(/\D/g, "").slice(0, 4))} /></FormField>}
               <FormField label="Relationship" icon={<Users className="size-4" />}><input className={INPUT} value={form.relationship} onChange={(event) => set("relationship", event.target.value)} /></FormField>
               <FormField label={editing ? "Reset Guardian Master Access Key (optional)" : "Guardian Master Access Key"} icon={<Lock className="size-4" />}><input type="password" autoComplete="new-password" maxLength={12} className={INPUT} placeholder="5–12 characters with uppercase, number & symbol" value={form.secretCode} onChange={(event) => set("secretCode", event.target.value)} /></FormField>
               {editing && <button type="button" disabled={busy} onClick={saveEdit} className="w-full rounded-xl bg-accent py-3 text-sm font-bold text-accent-foreground">Save Profile</button>}
@@ -274,7 +290,7 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
 function DependentCard({ dependent, onEdit, onView }: { dependent: DependentProfile; onEdit: () => void; onView: () => void }) {
   const age = computeAge(dependent.dob)
   const child = dependent.relationship.toLowerCase() === "child" || dependent.relationship.toLowerCase() === "ward"
-  return <div className="rounded-2xl bg-card p-4 shadow-sm"><div className="flex items-start gap-3"><div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary">{child ? <Baby className="size-7" /> : <User className="size-7" />}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-base font-bold text-foreground">{dependent.name}</p><span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold text-accent">{dependent.relationship || "Dependent"}</span></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{age !== null ? `${age} yrs · ` : ""}{dependent.assignedEmail}</p><div className="mt-2 flex items-center gap-1.5 rounded-lg bg-secondary px-2 py-1 text-xs font-semibold text-secondary-foreground"><Tag className="size-3.5 text-primary" /> MediTag ID: {dependent.mediTagId}</div></div></div><div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3"><span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Lock className="size-3.5 text-primary" /> Guardian key protected</span><div className="flex gap-2"><button type="button" onClick={onView} className="rounded-full bg-accent px-3 py-1.5 text-xs font-bold text-accent-foreground">View Dependent Profile</button><button type="button" onClick={onEdit} aria-label="Edit dependent link" className="grid size-8 place-items-center rounded-full bg-primary/10 text-primary"><Edit2 className="size-3.5" /></button></div></div></div>
+  return <div className="rounded-2xl bg-card p-4 shadow-sm"><div className="flex items-start gap-3"><div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary">{child ? <Baby className="size-7" /> : <User className="size-7" />}</div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-base font-bold text-foreground">{dependent.name}</p><span className="shrink-0 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-semibold text-accent">{dependent.relationship || "Dependent"}</span></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{age !== null ? `${age} yrs · ` : ""}{dependent.assignedEmail}</p><div className="mt-2 flex items-center gap-1.5 rounded-lg bg-secondary px-2 py-1 text-xs font-semibold text-secondary-foreground"><Tag className="size-3.5 text-primary" /> Card ID: {dependent.cardId || dependent.mediTagId}</div></div></div><div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3"><span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Lock className="size-3.5 text-primary" /> Guardian key protected</span><div className="flex gap-2"><button type="button" onClick={onView} className="rounded-full bg-accent px-3 py-1.5 text-xs font-bold text-accent-foreground">View Dependent Profile</button><button type="button" onClick={onEdit} aria-label="Edit dependent link" className="grid size-8 place-items-center rounded-full bg-primary/10 text-primary"><Edit2 className="size-3.5" /></button></div></div></div>
 }
 
 const INPUT = "w-full rounded-xl border border-border bg-input px-3 py-2.5 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"

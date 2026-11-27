@@ -59,7 +59,7 @@ export function AuthScreen({
         onAuthed("login")
       } else {
         if (!name.trim() || !email.trim() || !password || !dob) return setError("Enter your name, date of birth, email, and password.")
-        if (customCardId && !/^(1000|1[0-9]{3}|2[0-9]{3}|3000)$/.test(customCardId)) return setError("Card ID must be from LV-1000 through LV-3000.")
+        if (!/^((1[0-9]{3})|2000)$/.test(customCardId)) return setError("Choose an unclaimed Card ID from LV-1000 through LV-2000.")
         if (!agreeTerms)
           return setError("Consent to the Privacy Policy and health-data processing is required to register.")
         const res = await store.register({
@@ -67,7 +67,7 @@ export function AuthScreen({
           email: email.trim(),
           password,
           dob,
-          cardId: customCardId ? `LV-${customCardId}` : undefined,
+          cardId: `LV-${customCardId}`,
         })
         if (!res.ok) return setError(res.error ?? "Sign up failed.")
         if (res.pendingConfirmation) {
@@ -158,11 +158,12 @@ export function AuthScreen({
               <span className="border-r border-border px-4 py-3 text-sm font-bold tracking-wide text-primary">LV-</span>
               <input
                 className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm tracking-[0.18em] text-foreground outline-none placeholder:tracking-normal"
-                aria-label="Optional custom Card ID number"
+                aria-label="Required Card ID number"
                 inputMode="numeric"
-                pattern="(1000|1[0-9]{3}|2[0-9]{3}|3000)"
+                pattern="(1[0-9]{3}|2000)"
                 maxLength={4}
-                placeholder="Optional · auto-assigned if blank"
+                placeholder="1000–2000"
+                required
                 value={customCardId}
                 onChange={(e) => setCustomCardId(e.target.value.replace(/\D/g, "").slice(0, 4))}
               />
@@ -200,7 +201,7 @@ export function AuthScreen({
               aria-label="Four-digit Card ID"
               autoComplete="username"
               inputMode="numeric"
-              pattern="(1000|1[0-9]{3}|2[0-9]{3}|3000)"
+              pattern="(1[0-9]{3}|2000)"
               maxLength={4}
               placeholder="1000"
               required

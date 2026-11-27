@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   const values = body && typeof body === "object" ? body as Record<string, unknown> : {}
   const cardId = typeof values.cardId === "string" ? values.cardId.trim().toUpperCase() : ""
   const mmcId = typeof values.mmcId === "string" ? values.mmcId.trim() : ""
-  const validCardId = /^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/.test(cardId) || /^MT-[A-Z0-9]{4,8}$/.test(cardId)
+  const validCardId = /^LV-(1[0-9]{3}|2000)$/.test(cardId) || /^MT-[A-Z0-9]{4,8}$/.test(cardId)
   if (!validCardId || !/^[A-Za-z0-9/.-]{2,64}$/.test(mmcId)) {
     return NextResponse.json({ error: "Patient Card ID or MMC ID is invalid." }, { status: 400, headers: noStore })
   }

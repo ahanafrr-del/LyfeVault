@@ -44,7 +44,9 @@ export type DependentProfile = {
   assignedPassword: string
   /** Strong parental secret code (5-12 chars incl. uppercase, number, special) unlocking edit access on the minor dashboard. */
   parentalSecretCode: string
-  /** Physical paired tag identifier, e.g. "MT-7Q2K". */
+  /** Physical Card ID printed on the dependent's emergency card. */
+  cardId: string
+  /** Legacy paired tag identifier. */
   mediTagId: string
 }
 
@@ -57,6 +59,10 @@ export type UserProfile = {
   password: string
   /** Physical Card/Tag ID printed on the user's card, used for Quick Card login and emergency lookup. */
   cardId: string
+  mainProfileId: string
+  trialEndsAt: string
+  subscriptionStatus: string
+  subscriptionPlan: string
   allergies: string[]
   conditions: string[]
   medications: string[]
@@ -75,6 +81,10 @@ type ProfileRow = {
   blood_group: string | null
   gender: string | null
   card_id: string | null
+  main_profile_id: string | null
+  trial_ends_at: string | null
+  subscription_status: string | null
+  subscription_plan: string | null
   allergies: unknown
   conditions: unknown
   medications: unknown
@@ -112,6 +122,7 @@ type DependentRow = {
   medications?: unknown
   contacts: unknown
   assigned_email: string | null
+  card_id: string | null
   medi_tag_id: string | null
 }
 
@@ -149,6 +160,10 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
     email: normalizeEmail(user.email),
     password: "",
     cardId: user.cardId ?? "",
+    mainProfileId: user.mainProfileId ?? "",
+    trialEndsAt: user.trialEndsAt ?? "",
+    subscriptionStatus: user.subscriptionStatus ?? "trialing",
+    subscriptionPlan: user.subscriptionPlan ?? "",
     allergies: user.allergies ?? [],
     conditions: user.conditions ?? [],
     medications: user.medications ?? [],
@@ -159,6 +174,7 @@ function normalizeUser(user: Partial<UserProfile> & { email: string }): UserProf
       assignedEmail: normalizeEmail(dependent.assignedEmail ?? ""),
       assignedPassword: dependent.assignedPassword ?? "",
       parentalSecretCode: dependent.parentalSecretCode ?? "",
+      cardId: dependent.cardId ?? "",
       allergies: dependent.allergies ?? [],
       conditions: dependent.conditions ?? [],
       medications: dependent.medications ?? [],
@@ -175,7 +191,7 @@ function dependentAsUser(parent: UserProfile, dependent: DependentProfile): User
     gender: "",
     email: dependent.assignedEmail || parent.email,
     password: "",
-    cardId: dependent.mediTagId,
+    cardId: dependent.cardId || dependent.mediTagId,
     allergies: dependent.allergies,
     conditions: dependent.conditions,
     medications: dependent.medications,
@@ -197,8 +213,9 @@ function mapDependentRow(row: DependentRow): DependentProfile {
     medications: asStringArray(row.medications),
     contacts: asContactsArray(row.contacts),
     assignedEmail: normalizeEmail(row.assigned_email ?? ""),
-  assignedPassword: "",
-  parentalSecretCode: "",
+    assignedPassword: "",
+    parentalSecretCode: "",
+    cardId: row.card_id ?? "",
     mediTagId: row.medi_tag_id ?? "",
   }
 }
@@ -226,7 +243,7 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   const key = normalizeEmail(email)
   if (!key && !authUserId) return null
 
-  const profileQuery = supabase.from("profiles").select("auth_user_id,email,name,dob,blood_group,gender,card_id,allergies,conditions,medications,contacts,updated_at")
+  const profileQuery = supabase.from("profiles").select("auth_user_id,email,name,dob,blood_group,gender,card_id,main_profile_id,trial_ends_at,subscription_status,subscription_plan,allergies,conditions,medications,contacts,updated_at")
   const { data: profileData, error: profileError } = authUserId
     ? await profileQuery.eq("auth_user_id", authUserId).maybeSingle()
     : await profileQuery.eq("email", key).maybeSingle()
@@ -247,7 +264,7 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
       .order("created_at", { ascending: false }),
     supabase
       .from("dependents")
-      .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id")
+      .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,card_id,medi_tag_id")
       .eq("owner_email", key),
   ])
 
@@ -269,6 +286,10 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
     email: row.email,
     password: "",
     cardId: row.card_id ?? "",
+    mainProfileId: row.main_profile_id ?? "",
+    trialEndsAt: row.trial_ends_at ?? "",
+    subscriptionStatus: row.subscription_status ?? "trialing",
+    subscriptionPlan: row.subscription_plan ?? "",
     allergies: asStringArray(row.allergies),
     conditions: asStringArray(row.conditions),
     medications: asStringArray(row.medications),
@@ -286,7 +307,7 @@ async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: stri
 
   const { data: linkedRow, error: linkedError } = await supabase
     .from("dependents")
-    .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id")
+    .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,card_id,medi_tag_id")
     .eq("assigned_email", email)
     .maybeSingle()
   if (linkedError) throw new Error(linkedError.message)
@@ -348,6 +369,7 @@ async function syncDependentsToSupabase(ownerEmail: string, dependents: Dependen
           conditions: dependent.conditions,
           medications: dependent.medications,
           contacts: dependent.contacts,
+          card_id: dependent.cardId || null,
           medi_tag_id: dependent.mediTagId,
         })
         .eq("id", dependent.id)
@@ -357,7 +379,7 @@ async function syncDependentsToSupabase(ownerEmail: string, dependents: Dependen
   }
 }
 
-type AuthData = { name: string; email: string; password: string; dob: string; cardId?: string; parentalMasterKey?: string; bloodGroup?: string; gender?: string }
+type AuthData = { name: string; email: string; password: string; dob: string; cardId: string; parentalMasterKey?: string; bloodGroup?: string; gender?: string }
 
 const PARENTAL_KEY_ITERATIONS = 310_000
 
@@ -435,9 +457,22 @@ export function useStore(): StoreApi {
     if (!email || !password) return { ok: false, error: "Email and password are required." }
     if (!dob || age === null || age < 0) return { ok: false, error: "Enter a valid date of birth." }
     if (password.length < 6) return { ok: false, error: "Choose a password with at least 6 characters." }
-    if (customCardId && !/^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/i.test(customCardId)) {
-      return { ok: false, error: "Card ID must be LV-1000 through LV-3000." }
+    if (!/^LV-(1[0-9]{3}|2000)$/i.test(customCardId)) {
+      return { ok: false, error: "Choose a Card ID from LV-1000 through LV-2000." }
     }
+    const availableResponse = await fetch("/api/auth/card-availability", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cardId: customCardId.toUpperCase() }),
+    }).catch(() => null)
+    if (!availableResponse?.ok) return { ok: false, error: "Card ID availability could not be verified. Try again." }
+    const availability = await availableResponse.json() as { available?: boolean }
+    if (!availability.available) return { ok: false, error: "That Card ID is already claimed. Choose another one." }
+
+    const trialStartedAt = new Date()
+    const trialEndsAt = new Date(trialStartedAt)
+    trialEndsAt.setUTCMonth(trialEndsAt.getUTCMonth() + 6)
+    if (trialEndsAt.getUTCDate() !== trialStartedAt.getUTCDate()) trialEndsAt.setUTCDate(0)
     const profile = normalizeUser({
       ...data,
       email,
@@ -462,7 +497,10 @@ export function useStore(): StoreApi {
             dob: profile.dob,
             blood_group: profile.bloodGroup,
             gender: profile.gender,
-            custom_card_id: customCardId ? customCardId.toUpperCase() : "",
+            custom_card_id: customCardId.toUpperCase(),
+            main_profile_id: `LV-PROF-${String(crypto.getRandomValues(new Uint16Array(1))[0] % 10000).padStart(4, "0")}`,
+            trial_ends_at: trialEndsAt.toISOString(),
+            subscription_status: "trialing",
             health_data_consent: true,
             consent_version: "2026-11-25",
           },
@@ -527,8 +565,8 @@ export function useStore(): StoreApi {
     if (!target) return { ok: false, error: "Enter your Card/Tag ID." }
     if (!password) return { ok: false, error: "Enter your password." }
 
-    if (!/^LV-(1000|1[0-9]{3}|2[0-9]{3}|3000)$/i.test(target)) {
-      return { ok: false, error: "Enter a Card ID from LV-1000 to LV-3000." }
+    if (!/^LV-(1[0-9]{3}|2000)$/i.test(target)) {
+      return { ok: false, error: "Enter a Card ID from LV-1000 to LV-2000." }
     }
 
     try {
@@ -626,7 +664,7 @@ export function useStore(): StoreApi {
     const email = normalizeEmail(user?.email ?? "")
     if (authError || !email) throw new Error("Sign in to update your profile.")
 
-    const { data: linkedRow, error: linkedError } = await supabase.from("dependents").select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id").eq("assigned_email", email).maybeSingle()
+    const { data: linkedRow, error: linkedError } = await supabase.from("dependents").select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,card_id,medi_tag_id").eq("assigned_email", email).maybeSingle()
     if (linkedError) throw new Error(linkedError.message)
     if (linkedRow) {
       const linkedProfile = dependentAsUser({ email } as UserProfile, mapDependentRow(linkedRow as DependentRow))
@@ -696,7 +734,7 @@ export function useStore(): StoreApi {
     try {
       const { data: depRow, error } = await supabase
         .from("dependents")
-        .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,medi_tag_id")
+        .select("id,owner_email,name,dob,relationship,blood_group,allergies,conditions,medications,contacts,assigned_email,card_id,medi_tag_id")
         .eq("assigned_email", key)
         .maybeSingle()
       if (error || !depRow) return null
@@ -764,6 +802,7 @@ export function useStore(): StoreApi {
       conditions: updated.conditions,
       medications: updated.medications,
       contacts: updated.contacts,
+      card_id: updated.cardId || null,
     }).eq("id", id).eq("owner_email", email)
     if (error) throw new Error(error.message)
     const refreshed = await fetchFullProfileByEmail(email)

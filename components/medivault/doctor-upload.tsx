@@ -4,20 +4,11 @@ import { useRef, useState } from "react"
 import {
   UploadCloud,
   FileCheck2,
-  QrCode,
-  BadgeCheck,
   AlertCircle,
 } from "lucide-react"
 import { ModalShell } from "./shared"
 import { supabase } from "@/lib/supabase"
-import { QrCameraScanner } from "./qr-camera-scanner"
-import {
-  getPilotRegistrationId,
-  recognizeOfficialMmcKydQr,
-  SPECIALIZATIONS,
-  validateMedicalLicense,
-  type StoreApi,
-} from "@/lib/store"
+import { SPECIALIZATIONS, type StoreApi } from "@/lib/store"
 
 export function DoctorUpload({
   store,
@@ -38,34 +29,16 @@ export function DoctorUpload({
   const [notes, setNotes] = useState("")
   const [fileName, setFileName] = useState("")
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [license, setLicense] = useState("")
-  const [verified, setVerified] = useState(false)
-  const [officialQrUrl, setOfficialQrUrl] = useState<string | null>(null)
-  const [kydConfirmed, setKydConfirmed] = useState(false)
-  const [scannerOpen, setScannerOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  function verifyTyped() {
-    const result = validateMedicalLicense({ doctorName, registrationNumber: license, institution: clinic })
-    if (!result.ok) {
-      setError(result.error ?? "Enter a license number and an approved pilot clinic, or scan an official MMC/KYD QR code.")
-      return
-    }
-    setVerified(true)
-    setError(null)
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     if (!doctorName.trim() || !specialization || !date) {
       setError("Please fill in the doctor name, specialization, and date.")
-      return
-    }
-    if (!verified) {
-      setError("The doctor's medical license must be verified before uploading.")
       return
     }
     if (!selectedFile) {
@@ -100,7 +73,7 @@ export function DoctorUpload({
         clinic: clinic.trim(),
         date,
         time,
-        licenseNumber: license,
+        licenseNumber: "",
         fileName: fileName || "report.pdf",
         notes: notes.trim(),
         filePath,
@@ -118,7 +91,7 @@ export function DoctorUpload({
 
   return (
     <>
-      <ModalShell title="Add Medical Report" subtitle="Verified doctor upload" onClose={onClose} headerAccent>
+      <ModalShell title="Add Medical Report" subtitle="Add a report from your care team" onClose={onClose} headerAccent>
       <form onSubmit={submit} className="space-y-4 p-5">
         <div>
           <Label>Doctor&apos;s Full Name</Label>
@@ -128,8 +101,6 @@ export function DoctorUpload({
             value={doctorName}
             onChange={(e) => {
               setDoctorName(e.target.value)
-              setVerified(false)
-              setKydConfirmed(false)
             }}
           />
         </div>
@@ -158,8 +129,6 @@ export function DoctorUpload({
               value={clinic}
               onChange={(e) => {
                 setClinic(e.target.value)
-                setVerified(false)
-                setKydConfirmed(false)
               }}
             />
           </div>
@@ -240,71 +209,7 @@ export function DoctorUpload({
           />
         </div>
 
-        {/* Authentication gate */}
-        <div className="rounded-xl bg-secondary p-3">
-          <Label>Medical License Number</Label>
-          <div className="flex gap-2">
-            <input
-              className={inputClass}
-              placeholder="e.g. MED-482913"
-              value={license}
-              onChange={(e) => {
-                setLicense(e.target.value)
-                setVerified(false)
-                setKydConfirmed(false)
-                setOfficialQrUrl(null)
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => setScannerOpen(true)}
-              aria-label="Scan QR code"
-              className="grid shrink-0 place-items-center rounded-xl bg-primary px-3 text-primary-foreground transition hover:brightness-110"
-            >
-              <QrCode className="h-5 w-5" />
-            </button>
-          </div>
-          {officialQrUrl && (
-            <div className="mt-3 space-y-2 rounded-xl border border-primary/20 bg-primary/5 p-3">
-              <a href={officialQrUrl} target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-primary underline underline-offset-2">
-                Open official MMC/KYD record
-              </a>
-              <label className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={kydConfirmed}
-                  onChange={(event) => {
-                    setKydConfirmed(event.target.checked)
-                    setVerified(event.target.checked)
-                  }}
-                  className="mt-0.5 accent-primary"
-                />
-                I opened the official page and confirmed the doctor&apos;s name and active registration.
-              </label>
-            </div>
-          )}
-          {verified ? (
-            <div className="mt-2 flex items-start gap-1.5 text-xs font-semibold text-accent">
-              <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{kydConfirmed ? "Official MMC/KYD page confirmed by user" : "Pilot clinic recognized; not a live credential check"}</span>
-            </div>
-          ) : !officialQrUrl ? (
-            <div className="mt-2 space-y-1">
-              <button
-                type="button"
-                onClick={verifyTyped}
-                className="text-xs font-semibold text-primary underline-offset-2 hover:underline"
-              >
-                Check pilot clinic and license format
-              </button>
-              <p className="text-[11px] text-muted-foreground">
-                {getPilotRegistrationId(clinic)
-                  ? `Pilot reference ID for ${clinic}: ${getPilotRegistrationId(clinic)}. This is not a live council lookup.`
-                  : "Typed fallback is limited to the seven Navi Mumbai / Seawoods pilot clinics."}
-              </p>
-            </div>
-          ) : null}
-        </div>
+
 
         {error && (
           <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -321,39 +226,7 @@ export function DoctorUpload({
         </button>
       </form>
       </ModalShell>
-      {scannerOpen && (
-        <QrCameraScanner
-          onClose={() => setScannerOpen(false)}
-          onDetected={(value) => {
-            const recognition = recognizeOfficialMmcKydQr(value)
-            if (recognition.official && recognition.url) {
-              setOfficialQrUrl(recognition.url)
-              setLicense(recognition.registrationNumber ?? "")
-              setKydConfirmed(false)
-              setVerified(false)
-            } else {
-              setOfficialQrUrl(null)
-              setKydConfirmed(false)
-              setVerified(false)
-              try {
-                const payload: unknown = JSON.parse(value)
-                if (payload && typeof payload === "object") {
-                  const record = payload as Record<string, unknown>
-                  const licenseValue = record.licenseNumber ?? record.registrationNumber ?? record.license ?? record.license_number
-                  if (typeof licenseValue === "string") setLicense(licenseValue.trim())
-                  if (typeof record.doctorName === "string") setDoctorName(record.doctorName)
-                  if (typeof record.specialization === "string") setSpecialization(record.specialization)
-                  if (typeof record.clinic === "string") setClinic(record.clinic)
-                }
-              } catch {
-                setLicense(value.trim())
-              }
-            }
-            setScannerOpen(false)
-            setError(null)
-          }}
-        />
-      )}
+
     </>
   )
 }

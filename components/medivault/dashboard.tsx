@@ -1,5 +1,8 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import Image from "next/image"
+import QRCode from "qrcode"
 import {
   Bell,
   Search,
@@ -63,6 +66,35 @@ export function Dashboard({
     : "U"
   const primaryContact = user.contacts[0]
   const dependentCount = (user.dependents ?? []).length
+  const [busyPlan, setBusyPlan] = useState<"monthly" | "yearly" | null>(null)
+  const [billingError, setBillingError] = useState<string | null>(null)
+  const [daysRemaining, setDaysRemaining] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!user.trialEndsAt) return
+    const timer = window.setTimeout(() => {
+      setDaysRemaining(Math.max(0, Math.ceil((new Date(user.trialEndsAt).getTime() - Date.now()) / 86_400_000)))
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [user.trialEndsAt])
+
+  async function renew(planType: "monthly" | "yearly") {
+    setBusyPlan(planType)
+    setBillingError(null)
+    try {
+      const response = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planType, idempotencyKey: crypto.randomUUID() }),
+      })
+      const result = await response.json() as { url?: string; error?: string }
+      if (!response.ok || !result.url) throw new Error(result.error || "Checkout is unavailable. Please try again.")
+      window.location.assign(result.url)
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "Checkout is unavailable. Please try again.")
+      setBusyPlan(null)
+    }
+  }
 
   return (
     <div className="mx-auto w-full max-w-6xl bg-secondary pb-10">
@@ -133,13 +165,26 @@ export function Dashboard({
         </div>
       </div>
 
-      <div className="mt-4 px-4">
+      <div className="mt-4 grid gap-3 px-4 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="flex items-center gap-3 rounded-2xl border border-primary/15 bg-card px-4 py-3.5 shadow-sm">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><CreditCard className="size-5" /></span>
-          <div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Your LyfeVault Card ID</p><p className="mt-0.5 font-mono text-xl font-black tracking-[0.12em] text-primary">{user.cardId || "Assigning…"}</p></div>
+          <div className="min-w-0 flex-1"><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">Your LyfeVault Card ID</p><p className="mt-0.5 font-mono text-xl font-black tracking-[0.12em] text-primary">{user.cardId || "Assigning…"}</p><a href={user.cardId ? `/c/${encodeURIComponent(user.cardId)}` : undefined} className="mt-1 inline-block text-xs font-semibold text-primary underline underline-offset-2">View emergency card</a></div>
           <span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-bold text-accent">Emergency ready</span>
         </div>
+        {user.cardId && <CardQr cardId={user.cardId} />}
       </div>
+
+      {!readOnly && <section className="mt-4 rounded-2xl border border-border bg-card p-4 shadow-sm" aria-labelledby="subscription-heading">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><h2 id="subscription-heading" className="text-sm font-bold text-foreground">{user.subscriptionStatus === "active" ? "Subscription active" : "6-month free trial"}</h2><p className="mt-1 text-xs text-muted-foreground">{user.subscriptionStatus === "active" ? "Manage your LyfeVault renewal below." : daysRemaining === null ? "Your trial is active." : daysRemaining > 0 ? `${daysRemaining} days remaining · trial ends ${user.trialEndsAt.slice(0, 10)}` : "Your free trial has ended."}</p></div>
+        </div>
+        <p className="mt-3 rounded-xl bg-secondary px-3 py-2 text-xs text-muted-foreground">Monthly reminder: check this dashboard before your trial ends to keep your emergency card active.</p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <button type="button" onClick={() => renew("monthly")} disabled={busyPlan !== null} className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground transition hover:brightness-110 disabled:opacity-60">{busyPlan === "monthly" ? "Opening checkout…" : "Renew Subscription · ₹150/month"}</button>
+          <button type="button" onClick={() => renew("yearly")} disabled={busyPlan !== null} className="flex-1 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm font-bold text-primary transition hover:bg-primary/10 disabled:opacity-60">{busyPlan === "yearly" ? "Opening checkout…" : "Renew yearly · ₹1,500/year"}</button>
+        </div>
+        {billingError && <p role="alert" className="mt-3 text-sm font-medium text-destructive">{billingError}</p>}
+      </section>}
 
       {/* Centerpiece — Dependent Profiles hub */}
       <div className="mt-4 px-4">
@@ -197,7 +242,21 @@ export function Dashboard({
   )
 }
 
-function MiniStat({
+function CardQr({ cardId }: { cardId: string }) {
+  const [dataUrl, setDataUrl] = useState("")
+
+  useEffect(() => {
+    let active = true
+    QRCode.toDataURL(`${window.location.origin}/c/${encodeURIComponent(cardId)}`, { width: 180, margin: 1, errorCorrectionLevel: "M" })
+      .then((url) => { if (active) setDataUrl(url) })
+      .catch(() => { if (active) setDataUrl("") })
+    return () => { active = false }
+  }, [cardId])
+
+  return <div className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm"><div className="grid size-[92px] shrink-0 place-items-center rounded-xl bg-white p-1">{dataUrl ? <Image src={dataUrl} alt={`QR code linking to emergency card ${cardId}`} width={180} height={180} unoptimized className="size-full" /> : <span className="text-xs text-muted-foreground">Preparing QR…</span>}</div><div className="min-w-0"><p className="text-sm font-bold text-foreground">Emergency QR</p><p className="mt-1 text-xs text-muted-foreground">Scan to open your read-only triage card.</p>{dataUrl && <a href={dataUrl} download={`${cardId}-emergency-qr.png`} className="mt-2 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-bold text-accent-foreground">Download QR</a>}</div></div>
+}
+
+function MiniStat({ 
   icon,
   label,
   value,
