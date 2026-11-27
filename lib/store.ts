@@ -71,7 +71,19 @@ export type UserProfile = {
   dependents: DependentProfile[]
 }
 
-type Result = { ok: boolean; error?: string; message?: string; pendingConfirmation?: boolean }
+type Result = { ok: boolean; error?: string; message?: string; pendingConfirmation?: boolean; canResendConfirmation?: boolean }
+
+function confirmationEmailError(error: { code?: string; message: string }): Result | null {
+  const code = error.code?.toLowerCase() ?? ""
+  const message = error.message.toLowerCase()
+  if (code.includes("rate_limit") || message.includes("rate limit") || message.includes("too many")) {
+    return { ok: false, error: "Confirmation email rate limit reached. Wait a few minutes, then use Resend confirmation email below.", canResendConfirmation: true }
+  }
+  if (["email_address_not_authorized", "smtp_error", "email_provider_disabled"].includes(code) || message.includes("sending confirmation email") || message.includes("email delivery")) {
+    return { ok: false, error: "Supabase could not deliver the confirmation email. Check the address and try resending later; if it continues, email delivery needs attention.", canResendConfirmation: true }
+  }
+  return null
+}
 
 type ProfileRow = {
   auth_user_id: string | null
@@ -301,9 +313,9 @@ async function fetchFullProfileByEmail(email: string, authUserId?: string): Prom
   return { row, profile }
 }
 
-async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: string; user_metadata?: Record<string, unknown> }): Promise<UserProfile | null> {
+async function loadOrCreateAuthenticatedProfile(user: { id: string; email?: string; email_confirmed_at?: string | null; user_metadata?: Record<string, unknown> }): Promise<UserProfile | null> {
   const email = normalizeEmail(user.email ?? "")
-  if (!email) return null
+  if (!email || !user.email_confirmed_at) return null
 
   const { data: linkedRow, error: linkedError } = await supabase
     .from("dependents")
@@ -400,6 +412,7 @@ export type StoreApi = {
   emergencyProfile: UserProfile | null
   register: (data: AuthData) => Promise<Result>
   signup: (data: AuthData) => Promise<Result>
+  resendSignupConfirmation: (email: string) => Promise<Result>
   login: (email: string, password: string) => Promise<Result>
   loginByCard: (cardId: string, password: string) => Promise<Result>
   loginWithPasskey: () => Promise<Result>
@@ -507,14 +520,15 @@ export function useStore(): StoreApi {
         if (message.includes("already registered") || message.includes("already been registered")) {
           return { ok: false, error: "Unable to create the account with these details. Try signing in instead." }
         }
-        return { ok: false, error: error.message }
+        return confirmationEmailError(error) ?? { ok: false, error: error.message }
       }
       if (!authData.user) return { ok: false, error: "Account creation could not be completed. Try again." }
 
-      if (!authData.session) {
+      if (!authData.session || !authData.user.email_confirmed_at) {
         return {
           ok: true,
           pendingConfirmation: true,
+          canResendConfirmation: true,
           message: "Account created. Confirm your email using the link we sent, then sign in to finish setting up your profile.",
         }
       }
@@ -525,6 +539,25 @@ export function useStore(): StoreApi {
       return { ok: true }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Could not create the account." }
+    }
+  }, [])
+
+  const resendSignupConfirmation: StoreApi["resendSignupConfirmation"] = useCallback(async (email) => {
+    const key = normalizeEmail(email)
+    if (!key) return { ok: false, error: "Enter your email address first." }
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: key,
+        options: {
+          emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback`,
+        },
+      })
+      if (error) return confirmationEmailError(error) ?? { ok: false, error: "Could not resend the confirmation email. Try again later.", canResendConfirmation: true }
+      return { ok: true, message: "Confirmation email sent. Check your inbox and spam folder." }
+    } catch {
+      return { ok: false, error: "Could not resend the confirmation email. Check your connection and try again.", canResendConfirmation: true }
     }
   }, [])
 
@@ -817,6 +850,7 @@ export function useStore(): StoreApi {
     emergencyProfile: currentUser,
     register,
     signup: register,
+    resendSignupConfirmation,
     login,
     loginByCard,
     loginWithPasskey,
