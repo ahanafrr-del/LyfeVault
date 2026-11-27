@@ -28,6 +28,7 @@ export function AuthScreen({
   const [loginMethod, setLoginMethod] = useState<"email" | "card">("email")
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [canResendConfirmation, setCanResendConfirmation] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const [email, setEmail] = useState("")
@@ -69,8 +70,12 @@ export function AuthScreen({
           dob,
           cardId: `LV-${customCardId}`,
         })
-        if (!res.ok) return setError(res.error ?? "Sign up failed.")
+        if (!res.ok) {
+          setCanResendConfirmation(Boolean(res.canResendConfirmation))
+          return setError(res.error ?? "Sign up failed.")
+        }
         if (res.pendingConfirmation) {
+          setCanResendConfirmation(true)
           setStatusMessage(res.message ?? "Confirm your email before signing in.")
           return
         }
@@ -79,6 +84,28 @@ export function AuthScreen({
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : null
       setError(message || (mode === "signup" ? "Account creation could not be completed. Try again." : "Login could not be completed. Try again."))
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  async function resendConfirmation() {
+    if (isSubmitting) return
+    setError(null)
+    setStatusMessage(null)
+    setIsSubmitting(true)
+    try {
+      const result = await store.resendSignupConfirmation(email)
+      if (!result.ok) {
+        setCanResendConfirmation(Boolean(result.canResendConfirmation))
+        setError(result.error ?? "Could not resend the confirmation email.")
+        return
+      }
+      setCanResendConfirmation(true)
+      setStatusMessage(result.message ?? "Confirmation email sent. Check your inbox and spam folder.")
+    } catch {
+      setCanResendConfirmation(true)
+      setError("Could not resend the confirmation email. Check your connection and try again.")
     } finally {
       setIsSubmitting(false)
     }
@@ -115,6 +142,7 @@ export function AuthScreen({
               setMode(m)
               setError(null)
               setStatusMessage(null)
+              setCanResendConfirmation(false)
             }}
             className={`flex-1 rounded-full py-2 text-sm font-semibold capitalize transition-colors ${
               mode === m ? "bg-primary text-primary-foreground shadow" : "text-muted-foreground"
@@ -298,6 +326,17 @@ export function AuthScreen({
           <p role="status" className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-foreground">
             {statusMessage}
           </p>
+        )}
+
+        {mode === "signup" && canResendConfirmation && (
+          <button
+            type="button"
+            onClick={resendConfirmation}
+            disabled={isSubmitting || !email.trim()}
+            className="rounded-xl border border-primary/25 bg-card py-2.5 text-sm font-semibold text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSubmitting ? "Sending…" : "Resend confirmation email"}
+          </button>
         )}
 
         {error && (
