@@ -79,10 +79,9 @@ export function DependentsDirectory({ store, user, onBack }: { store: StoreApi; 
       setError("Choose a Card ID from LV-1000 through LV-2000.")
       return
     }
-    const availabilityResponse = await fetch("/api/auth/card-availability", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cardId: dependentCardId }) }).catch(() => null)
-    if (!availabilityResponse?.ok) { setError("Card ID availability could not be verified. Try again."); return }
-    const availability = await availabilityResponse.json() as { available?: boolean }
-    if (!availability.available) { setError("That Card ID is already claimed. Choose another one."); return }
+    const { data: isCardIdAvailable, error: availabilityError } = await supabase.rpc("is_card_id_available", { check_card_id: dependentCardId })
+    if (availabilityError || typeof isCardIdAvailable !== "boolean") { setError("Card ID availability could not be verified. Try again."); return }
+    if (!isCardIdAvailable) { setError("That Card ID is already claimed. Choose another one."); return }
     const secret = validateParentalCode(form.secretCode)
     if (!secret.ok) { setError(secret.error ?? "Choose a valid secret access code."); return }
     setBusy(true)

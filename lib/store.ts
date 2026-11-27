@@ -460,14 +460,9 @@ export function useStore(): StoreApi {
     if (!/^LV-(1[0-9]{3}|2000)$/i.test(customCardId)) {
       return { ok: false, error: "Choose a Card ID from LV-1000 through LV-2000." }
     }
-    const availableResponse = await fetch("/api/auth/card-availability", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cardId: customCardId.toUpperCase() }),
-    }).catch(() => null)
-    if (!availableResponse?.ok) return { ok: false, error: "Card ID availability could not be verified. Try again." }
-    const availability = await availableResponse.json() as { available?: boolean }
-    if (!availability.available) return { ok: false, error: "That Card ID is already claimed. Choose another one." }
+    const { data: isCardIdAvailable, error: availabilityError } = await supabase.rpc("is_card_id_available", { check_card_id: customCardId.toUpperCase() })
+    if (availabilityError || typeof isCardIdAvailable !== "boolean") return { ok: false, error: "Card ID availability could not be verified. Try again." }
+    if (!isCardIdAvailable) return { ok: false, error: "That Card ID is already claimed. Choose another one." }
 
     const trialStartedAt = new Date()
     const trialEndsAt = new Date(trialStartedAt)
